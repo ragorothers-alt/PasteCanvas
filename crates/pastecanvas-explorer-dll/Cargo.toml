@@ -1,0 +1,18 @@
+[package]
+name = "pastecanvas-explorer-dll"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+description = "Windows Explorer IExplorerCommand COM server for PasteCanvas (CAP-007)"
+
+[lib]
+name = "pastecanvas_explorer_dll"
+crate-type = ["cdylib"]
+
+[dependencies]
+windows = { workspace = true }
+windows-core = { workspace = true }
+
+[dev-dependencies]

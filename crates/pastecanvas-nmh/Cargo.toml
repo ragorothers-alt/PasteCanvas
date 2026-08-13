@@ -1,0 +1,18 @@
+[package]
+name = "pastecanvas-nmh"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+description = "PasteCanvas Native Messaging Host for browser extension capture (CAP-008)"
+
+[[bin]]
+name = "pastecanvas-nmh"
+path = "src/main.rs"
+
+[dependencies]
+pastecanvas-desktop = { path = "../../apps/desktop/src-tauri" }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }

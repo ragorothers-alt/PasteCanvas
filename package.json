@@ -1,0 +1,23 @@
+{
+  "name": "pastecanvas",
+  "private": true,
+  "version": "0.1.0",
+  "description": "PasteCanvas - Windows-first local-first personal capture and canvas tool",
+  "scripts": {
+    "desktop:dev": "pnpm --filter @pastecanvas/desktop dev",
+    "desktop:build": "pnpm --filter @pastecanvas/desktop build",
+    "lint": "pnpm -r run lint",
+    "typecheck": "pnpm -r run typecheck",
+    "test": "pnpm -r run test",
+    "format": "prettier --write \"apps/**/*.{ts,tsx,css,json}\" \"packages/**/*.{ts,tsx,css,json}\"",
+    "format:check": "prettier --check \"apps/**/*.{ts,tsx,css,json}\" \"packages/**/*.{ts,tsx,css,json}\""
+  },
+  "engines": {
+    "node": ">=22.0.0",
+    "pnpm": ">=10.0.0"
+  },
+  "packageManager": "pnpm@10.26.2",
+  "pnpm": {
+    "onlyBuiltDependencies": ["esbuild"]
+  }
+}

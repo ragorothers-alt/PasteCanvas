@@ -1,0 +1,16 @@
+[package]
+name = "pastecanvas-explorer"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+description = "PasteCanvas Explorer context-menu bridge for file capture (CAP-007)"
+
+[[bin]]
+name = "pastecanvas-explorer"
+path = "src/main.rs"
+
+[dependencies]
+pastecanvas-desktop = { path = "../../apps/desktop/src-tauri" }
+tokio = { workspace = true }

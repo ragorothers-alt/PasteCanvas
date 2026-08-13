@@ -1,0 +1,15 @@
+{
+  "manifest_version": 3,
+  "name": "PasteCanvas Capture",
+  "version": "0.1.0",
+  "description": "Capture pages, selections, links, images, and videos into PasteCanvas. Local-first — no cloud.",
+  "permissions": ["contextMenus", "nativeMessaging"],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  }
+}

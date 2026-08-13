@@ -1,0 +1,59 @@
+# Dependencies
+node_modules/
+target/
+
+# Build output
+dist/
+dist-tauri/
+*.exe
+*.dll
+*.pdb
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# App data (never commit real user data)
+PasteCanvasData/
+*.sqlite3
+*.sqlite3-wal
+*.sqlite3-shm
+
+# Test fixtures with real content
+fixtures/real/
+
+# Logs
+*.log
+logs/
+
+# Coverage
+coverage/
+*.lcov
+
+# Browser and UI test artifacts
+output/
+playwright-report/
+test-results/
+apps/desktop/playwright-report/
+apps/desktop/test-results/
+apps/desktop/e2e-screenshot-*.png
+
+# Native messaging test output
+nmh_out.bin
+
+# Temporary
+tmp/
+temp/
+*.tmp

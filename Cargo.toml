@@ -1,0 +1,80 @@
+[workspace]
+resolver = "2"
+members = [
+  "apps/desktop/src-tauri",
+  "crates/pastecanvas-contracts",
+  "crates/pastecanvas-test-support",
+  "crates/pastecanvas-nmh",
+  "crates/pastecanvas-explorer",
+  "crates/pastecanvas-explorer-dll",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+authors = ["PasteCanvas"]
+rust-version = "1.85"
+
+[workspace.dependencies]
+# Tauri
+tauri = { version = "2", features = ["tray-icon"] }
+tauri-build = { version = "2" }
+tauri-plugin-single-instance = "2"
+tauri-plugin-global-shortcut = "2"
+tauri-plugin-clipboard-manager = "2"
+
+# Async
+tokio = { version = "1", features = ["full"] }
+async-trait = "0.1"
+
+# Database
+sqlx = { version = "0.8", features = ["runtime-tokio", "sqlite"] }
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Error handling
+thiserror = "2"
+anyhow = "1"
+
+# UUID
+uuid = { version = "1", features = ["v7"] }
+
+# Time
+chrono = { version = "0.4", features = ["serde"] }
+
+# Hashing
+sha2 = "0.10"
+
+# Base64
+base64 = "0.22"
+
+# PNG encoding (screenshots/clipboard bitmaps → lossless PNG, per DAT-001)
+png = "0.17"
+
+# Windows COM / shell integration (IExplorerCommand context menu, CAP-007)
+windows = { version = "0.62", features = [
+  "Win32_Foundation",
+  "Win32_System_Com",
+  "Win32_System_SystemServices",
+  "Win32_UI_Shell",
+  "Win32_UI_Shell_PropertiesSystem",
+  "Win32_UI_WindowsAndMessaging",
+] }
+windows-core = "0.62"
+
+# URL
+url = "2"
+
+# HTTP client (metadata fetch)
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+
+# Internal crates
+pastecanvas-contracts = { path = "crates/pastecanvas-contracts" }
+pastecanvas-test-support = { path = "crates/pastecanvas-test-support" }
