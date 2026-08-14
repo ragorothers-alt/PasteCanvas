@@ -3,6 +3,7 @@ import { useReactFlow } from "@xyflow/react";
 import type { NodeProps } from "@xyflow/react";
 import type { CanvasNode, ItemCardData } from "../../adapters/canvas/CanvasMapper";
 import { setNodeCollapsed } from "./api";
+import { CaretDown, CaretRight } from "@phosphor-icons/react";
 
 /** BRD-010 (Workstream D): group frame with title and collapse toggle.
  * Collapsed groups hide their children — BoardView filters them out of the
@@ -28,12 +29,12 @@ export const GroupNode = memo(function GroupNode({ id, data }: NodeProps) {
       <div className="group-header">
         <button
           className="group-collapse-btn"
-          title={collapsed ? "Expand group" : "Collapse group"}
+        title={collapsed ? "展開群組" : "收合群組"}
           onClick={toggle}
         >
-          {collapsed ? "▸" : "▾"}
+          {collapsed ? <CaretRight aria-hidden="true" /> : <CaretDown aria-hidden="true" />}
         </button>
-        <span className="group-title">{d.titleOverride ?? "Group"}</span>
+        <span className="group-title">{d.titleOverride ?? "群組"}</span>
       </div>
     </div>
   );

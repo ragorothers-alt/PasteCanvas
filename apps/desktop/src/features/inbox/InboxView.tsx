@@ -8,14 +8,15 @@ import type { ItemSummary } from "./api";
 import { listBoards, placeItemOnBoard } from "../boards/api";
 import type { BoardSummary } from "../boards/api";
 import { showCaptureError, showCaptureSuccess } from "../../stores/toastStore";
+import { ArrowClockwise } from "@phosphor-icons/react";
 
 /** INB-002 smart-view mode labels. */
 const GROUP_MODES: Array<{ value: GroupMode; label: string }> = [
-  { value: "date", label: "Date" },
-  { value: "source", label: "Source" },
-  { value: "domain", label: "Domain" },
-  { value: "type", label: "Type" },
-  { value: "session", label: "Session" },
+  { value: "date", label: "日期" },
+  { value: "source", label: "來源" },
+  { value: "domain", label: "網域" },
+  { value: "type", label: "類型" },
+  { value: "session", label: "工作階段" },
 ];
 
 export function InboxView() {
@@ -56,7 +57,7 @@ export function InboxView() {
       clearSelection();
       await reload();
     } catch (error) {
-      showCaptureError(`Could not archive selected items: ${String(error)}`);
+      showCaptureError(`無法封存所選項目：${String(error)}`);
     } finally {
       setBatchBusy(false);
     }
@@ -70,7 +71,7 @@ export function InboxView() {
       clearSelection();
       await reload();
     } catch (error) {
-      showCaptureError(`Could not move selected items to Trash: ${String(error)}`);
+      showCaptureError(`無法將所選項目移到垃圾桶：${String(error)}`);
     } finally {
       setBatchBusy(false);
     }
@@ -81,7 +82,7 @@ export function InboxView() {
       setBatchBoards(await listBoards());
     } catch (error) {
       setBatchBoards([]);
-      showCaptureError(`Could not load boards: ${String(error)}`);
+      showCaptureError(`無法載入看板：${String(error)}`);
     }
   }, []);
 
@@ -95,9 +96,9 @@ export function InboxView() {
         index += 1;
       }
       clearSelection();
-      showCaptureSuccess(`${selectedIds.size} item${selectedIds.size === 1 ? "" : "s"} added to board`);
+      showCaptureSuccess(`已將 ${selectedIds.size} 個項目加入看板`);
     } catch (error) {
-      showCaptureError(`Could not add selected items to board: ${String(error)}`);
+      showCaptureError(`無法將所選項目加入看板：${String(error)}`);
     } finally {
       setBatchBusy(false);
     }
@@ -123,10 +124,10 @@ export function InboxView() {
   return (
     <div className="inbox-view">
       <header className="inbox-header">
-        <h2>Inbox</h2>
-        <span className="inbox-count">{items.length} items</span>
+        <h2>收件匣</h2>
+        <span className="inbox-count">{items.length} 個項目</span>
         {/* INB-002 smart-view grouping selector */}
-        <div className="group-mode-selector" role="tablist" aria-label="Group by">
+        <div className="group-mode-selector" role="tablist" aria-label="分組方式">
           {GROUP_MODES.map((m) => (
             <button
               key={m.value}
@@ -139,45 +140,45 @@ export function InboxView() {
             </button>
           ))}
         </div>
-        <button className="btn-refresh" onClick={() => void reload()} title="Refresh inbox" aria-label="Refresh inbox">
-          Refresh
+        <button className="btn-refresh" onClick={() => void reload()} title="重新整理收件匣" aria-label="重新整理收件匣">
+          <ArrowClockwise aria-hidden="true" /> 重新整理
         </button>
       </header>
 
       {selectedIds.size > 0 && (
-        <div className="batch-action-bar" role="toolbar" aria-label="Actions for selected items">
-          <strong>{selectedIds.size} selected</strong>
-          <button type="button" onClick={() => void handleBatchArchive()} disabled={batchBusy}>Archive</button>
-          <button type="button" onClick={() => void handleBatchTrash()} disabled={batchBusy}>Move to Trash</button>
+        <div className="batch-action-bar" role="toolbar" aria-label="所選項目動作">
+          <strong>已選 {selectedIds.size} 個</strong>
+          <button type="button" onClick={() => void handleBatchArchive()} disabled={batchBusy}>封存</button>
+          <button type="button" onClick={() => void handleBatchTrash()} disabled={batchBusy}>移到垃圾桶</button>
           {batchBoards.length === 0 ? (
-            <button type="button" onClick={() => void handleLoadBatchBoards()} disabled={batchBusy}>Add to board…</button>
+            <button type="button" onClick={() => void handleLoadBatchBoards()} disabled={batchBusy}>加入看板…</button>
           ) : (
             <>
-              <select aria-label="Target board" value={batchBoardId} onChange={(e) => setBatchBoardId(e.target.value)}>
-                <option value="">Choose board…</option>
+              <select aria-label="目標看板" value={batchBoardId} onChange={(e) => setBatchBoardId(e.target.value)}>
+                <option value="">選擇看板…</option>
                 {batchBoards.map((board) => <option key={board.id} value={board.id}>{board.name}</option>)}
               </select>
-              <button type="button" onClick={() => void handleBatchAddToBoard()} disabled={batchBusy || !batchBoardId}>Add</button>
+              <button type="button" onClick={() => void handleBatchAddToBoard()} disabled={batchBusy || !batchBoardId}>加入</button>
             </>
           )}
-          <button type="button" className="batch-clear" onClick={clearSelection} disabled={batchBusy}>Clear</button>
+          <button type="button" className="batch-clear" onClick={clearSelection} disabled={batchBusy}>清除</button>
         </div>
       )}
 
-      {state === "loading" && <div className="inbox-loading">Loading…</div>}
+      {state === "loading" && <div className="inbox-loading">載入中…</div>}
 
       {state === "error" && (
         <div className="inbox-error" role="alert">
           <p>{error}</p>
-          <button onClick={() => void reload()}>Retry</button>
+          <button onClick={() => void reload()}>重試</button>
         </div>
       )}
 
       {state === "success" && items.length === 0 && (
         <div className="inbox-empty">
-          <p>No items yet.</p>
+          <p>還沒有項目。</p>
           <p className="hint">
-            Press <kbd>Ctrl+Shift+V</kbd> to capture your clipboard.
+            按下 <kbd>Ctrl+Shift+V</kbd> 擷取剪貼簿內容。
           </p>
         </div>
       )}
@@ -198,7 +199,7 @@ export function InboxView() {
                     onToggleFavorite={() => void toggleFavorite(item.id)}
                     onTogglePin={() => void togglePin(item.id)}
                     onTrash={() => void trash(item.id)}
-                    onArchive={() => void archiveItem(item.id).then(() => reload()).catch((error) => showCaptureError(`Could not archive item: ${String(error)}`))}
+                    onArchive={() => void archiveItem(item.id).then(() => reload()).catch((error) => showCaptureError(`無法封存項目：${String(error)}`))}
                     onSelect={(selected) => toggleSelected(item.id, selected)}
                     selected={selectedIds.has(item.id)}
                     onOpen={() => setSelectedItem(item)}

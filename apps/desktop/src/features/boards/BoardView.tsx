@@ -201,7 +201,7 @@ function SubBoardCreator({
     if (busy) return;
     setBusy(true);
     try {
-      const newBoard = await createBoard("Sub-board");
+      const newBoard = await createBoard("子看板");
       // Place the link near the current viewport center (flow coordinates)
       const fx = (window.innerWidth / 2 - x) / zoom;
       const fy = (window.innerHeight / 2 - y) / zoom;
@@ -217,7 +217,7 @@ function SubBoardCreator({
   return (
     <Panel position="top-right">
       <button className="btn-sub-board" onClick={() => void handleClick()} disabled={busy}>
-        {busy ? "Creating…" : "+ Sub-board"}
+        {busy ? "建立中…" : "+ 子看板"}
       </button>
     </Panel>
   );
@@ -449,7 +449,7 @@ export function BoardView({ board, onEnterBoard }: BoardViewProps) {
   );
 
   if (loading) {
-    return <div className="board-loading">Loading board…</div>;
+    return <div className="board-loading">載入看板中…</div>;
   }
 
   return (

@@ -1,4 +1,6 @@
 import { memo, useEffect, useRef, useState } from "react";
+import type { ReactNode } from "react";
+import { Camera, FileCode, FilePdf, Image, LinkSimple, LockSimple, LockSimpleOpen, Note } from "@phosphor-icons/react";
 import { Handle, NodeResizer, Position, useReactFlow } from "@xyflow/react";
 import type { NodeProps } from "@xyflow/react";
 import type { CanvasNode, ItemCardData } from "../../adapters/canvas/CanvasMapper";
@@ -6,15 +8,23 @@ import { getItemThumbnail } from "../inbox/api";
 import { resizeNodes, setNodeLocked } from "./api";
 import { useUndoStore, createResizeCommand } from "../../stores/undoStore";
 
-function typeIcon(itemType: string | null): string {
+function typeIcon(itemType: string | null): ReactNode {
   switch (itemType) {
-    case "link": return "🔗";
-    case "image": return "🖼";
-    case "screenshot": return "📷";
-    case "pdf": return "📄";
-    case "code": return "💻";
-    default: return "📝";
+    case "link": return <LinkSimple aria-hidden="true" />;
+    case "image": return <Image aria-hidden="true" />;
+    case "screenshot": return <Camera aria-hidden="true" />;
+    case "pdf": return <FilePdf aria-hidden="true" />;
+    case "code": return <FileCode aria-hidden="true" />;
+    default: return <Note aria-hidden="true" />;
   }
+}
+
+function typeLabel(itemType: string | null): string {
+  const labels: Record<string, string> = {
+    plain_text: "文字", link: "連結", image: "圖片", screenshot: "螢幕截圖",
+    pdf: "PDF", code: "程式碼", color: "色彩", font: "字型", file: "檔案", svg: "SVG",
+  };
+  return labels[itemType ?? ""] ?? "筆記";
 }
 
 const THUMB_TYPES = new Set(["image", "screenshot"]);
@@ -49,7 +59,7 @@ export const ItemCardNode = memo(function ItemCardNode({ id, data, selected }: N
   const { setNodes, getNode } = useReactFlow<CanvasNode>();
   const { push } = useUndoStore();
   const originalSize = useRef<{ width: number; height: number } | null>(null);
-  const title = d.titleOverride ?? d.itemTitle ?? d.itemTextPreview ?? "(empty)";
+  const title = d.titleOverride ?? d.itemTitle ?? d.itemTextPreview ?? "（空白）";
   const showThumb = THUMB_TYPES.has(d.itemType ?? "") && d.itemId != null;
   const locked = d.locked === true;
 
@@ -109,13 +119,14 @@ export const ItemCardNode = memo(function ItemCardNode({ id, data, selected }: N
       <Handle type="target" position={Position.Top} className="card-handle" />
       <div className="card-header">
         <span className="card-icon">{typeIcon(d.itemType)}</span>
-        <span className="card-type">{d.itemType ?? "note"}</span>
+        <span className="card-type">{typeLabel(d.itemType)}</span>
         <button
           className="card-lock-btn"
-          title={locked ? "Unlock node" : "Lock node"}
+          title={locked ? "解除鎖定節點" : "鎖定節點"}
+          aria-label={locked ? "解除鎖定節點" : "鎖定節點"}
           onClick={toggleLock}
         >
-          {locked ? "🔒" : "🔓"}
+          {locked ? <LockSimple aria-hidden="true" /> : <LockSimpleOpen aria-hidden="true" />}
         </button>
       </div>
       {showThumb && <CardThumbnail itemId={d.itemId as string} />}

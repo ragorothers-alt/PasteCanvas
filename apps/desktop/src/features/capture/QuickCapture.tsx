@@ -11,6 +11,7 @@ import { captureText, captureFiles } from "../inbox/api";
 import { listBoards, placeItemOnBoard } from "../boards/api";
 import type { BoardSummary } from "../boards/api";
 import { showCaptureSuccess, showDedupNotice } from "../../stores/toastStore";
+import { Check, FloppyDisk, X } from "@phosphor-icons/react";
 
 export function QuickCapture() {
   const [text, setText] = useState("");
@@ -50,7 +51,7 @@ export function QuickCapture() {
         setStatus("saved");
         window.dispatchEvent(new CustomEvent("pastecanvas:item-captured"));
         showCaptureSuccess(
-          paths.length === 1 ? "File captured" : `${paths.length} files captured`,
+          paths.length === 1 ? "檔案已擷取" : `已擷取 ${paths.length} 個檔案`,
         );
         // CAP-002: brief confirmation, then close + restore previous focus
         setTimeout(() => closeFloating(), 300);
@@ -120,7 +121,7 @@ export function QuickCapture() {
       if (result.isDuplicate && result.duplicateOf) {
         showDedupNotice(result.duplicateOf);
       } else {
-        showCaptureSuccess("Captured");
+        showCaptureSuccess("已擷取");
       }
       // CAP-002: brief confirmation, then close + restore previous focus.
       // Inline (main-window) capture keeps the panel open.
@@ -151,29 +152,29 @@ export function QuickCapture() {
   );
 
   return (
-    <main className={`quick-capture-window ${isFloating ? "floating-quick-capture" : "inline-quick-capture"} ${dragOver ? "drag-over" : ""}`} aria-label="Quick Capture">
-      <div className="capture-ribbon" aria-hidden="true" />
-      <div className="quick-capture-heading">
-        <div>
-          <p className="eyebrow">PasteCanvas</p>
-          <h1>Quick Capture</h1>
-        </div>
-        {isFloating && (
-          <button className="btn-close-capture" type="button" onClick={closeFloating} aria-label="Close Quick Capture">
-            Esc
+    <main className={`quick-capture-window ${isFloating ? "floating-quick-capture" : "inline-quick-capture"} ${dragOver ? "drag-over" : ""}`} aria-label="快速擷取">
+      {isFloating && <>
+        <div className="capture-ribbon" aria-hidden="true" />
+        <div className="quick-capture-heading">
+          <div>
+            <p className="eyebrow">PasteCanvas</p>
+            <h1>快速擷取</h1>
+          </div>
+          <button className="btn-close-capture" type="button" onClick={closeFloating} aria-label="關閉快速擷取">
+            <X aria-hidden="true" /> Esc
           </button>
-        )}
-      </div>
+        </div>
+      </>}
       <div className="quick-capture">
       <textarea
         ref={inputRef}
         className="capture-input"
         placeholder={
           dragOver
-            ? "Drop files to capture…"
-            : "Paste text, a link, image, or file…"
+            ? "放開檔案即可擷取…"
+            : "貼上文字、連結、圖片或檔案…"
         }
-        aria-label="Capture content"
+        aria-label="擷取內容"
         value={text}
         onChange={(e) => setText(e.target.value)}
         onKeyDown={handleKeyDown}
@@ -185,9 +186,9 @@ export function QuickCapture() {
             className="capture-board-select"
             value={targetBoard}
             onChange={(e) => setTargetBoard(e.target.value)}
-            title="Optional target board"
+            title="選填的目標看板"
           >
-            <option value="">Inbox only</option>
+            <option value="">僅收件匣</option>
             {boards.map((b) => (
               <option key={b.id} value={b.id}>
                 → {b.name}
@@ -200,16 +201,16 @@ export function QuickCapture() {
           onClick={() => void handleSubmit()}
           disabled={!text.trim() || status === "saving"}
         >
-          {status === "saving" ? "Saving…" : "Capture"}
+          {status === "saving" ? "儲存中…" : <><FloppyDisk aria-hidden="true" /> 擷取</>}
         </button>
-        {status === "saved" && <span className="capture-success">✓ Saved</span>}
+        {status === "saved" && <span className="capture-success"><Check aria-hidden="true" /> 已儲存</span>}
         {status === "error" && (
           <span className="capture-error" role="alert">
-            Save failed. <button type="button" onClick={() => void handleSubmit()}>Try again</button>
+            儲存失敗。<button type="button" onClick={() => void handleSubmit()}>再試一次</button>
           </span>
         )}
       </div>
-      <p className="capture-footnote"><kbd>Enter</kbd> save <span aria-hidden="true">·</span> <kbd>Ctrl</kbd>/<kbd>⌘</kbd>+<kbd>Enter</kbd> save and keep open <span aria-hidden="true">·</span> <kbd>Esc</kbd> close</p>
+      {isFloating && <p className="capture-footnote"><kbd>Enter</kbd> 儲存 <span aria-hidden="true">·</span> <kbd>Ctrl</kbd>/<kbd>⌘</kbd>+<kbd>Enter</kbd> 儲存並保持開啟 <span aria-hidden="true">·</span> <kbd>Esc</kbd> 關閉</p>}
       </div>
     </main>
   );

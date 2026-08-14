@@ -1,4 +1,5 @@
 import { formatFileSize, titleFromFilename } from "../../adapters/pdf/PdfAdapter";
+import { FilePdf } from "@phosphor-icons/react";
 
 interface PdfCardProps {
   fileName: string;
@@ -16,12 +17,12 @@ export function PdfCard({ fileName, fileSize, pageCount }: PdfCardProps) {
 
   return (
     <div className="pdf-card">
-      <div className="pdf-icon" aria-hidden="true">📄</div>
+      <div className="pdf-icon" aria-hidden="true"><FilePdf /></div>
       <div className="pdf-info">
         <div className="pdf-title">{title}</div>
         <div className="pdf-meta">
           <span>{formatFileSize(fileSize)}</span>
-          {pageCount != null && <span>{pageCount} pages</span>}
+          {pageCount != null && <span>{pageCount} 頁</span>}
           <span className="pdf-ext">PDF</span>
         </div>
       </div>

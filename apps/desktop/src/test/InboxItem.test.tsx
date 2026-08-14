@@ -48,7 +48,7 @@ describe("InboxItem", () => {
         onTrash={vi.fn()}
       />,
     );
-    expect(screen.getByText("plain_text")).toBeDefined();
+    expect(screen.getByText("文字")).toBeDefined();
     expect(screen.getByText("notepad.exe")).toBeDefined();
   });
 
@@ -62,7 +62,7 @@ describe("InboxItem", () => {
         onTrash={vi.fn()}
       />,
     );
-    expect(screen.getByText("★")).toBeDefined();
+    expect(screen.getByTitle("取消收藏")).toBeDefined();
   });
 
   it("calls onToggleFavorite when star clicked", () => {
@@ -75,7 +75,7 @@ describe("InboxItem", () => {
         onTrash={vi.fn()}
       />,
     );
-    fireEvent.click(screen.getByText("☆"));
+    fireEvent.click(screen.getByTitle("加入收藏"));
     expect(onFav).toHaveBeenCalledTimes(1);
   });
 
@@ -89,13 +89,13 @@ describe("InboxItem", () => {
         onTrash={onTrash}
       />,
     );
-    fireEvent.click(screen.getByText("🗑"));
+    fireEvent.click(screen.getByTitle("移到垃圾桶"));
     expect(onTrash).toHaveBeenCalledTimes(1);
   });
 
   it("renders link icon for link type", () => {
     const linkItem = { ...mockItem, itemType: "link", title: "https://example.com" };
-    render(
+    const { container } = render(
       <InboxItem
         item={linkItem}
         onToggleFavorite={vi.fn()}
@@ -103,7 +103,7 @@ describe("InboxItem", () => {
         onTrash={vi.fn()}
       />,
     );
-    expect(screen.getByText("🔗")).toBeDefined();
+    expect(container.querySelector(".item-icon svg")).toBeDefined();
   });
 
   it("shows untitled for items without title or preview", () => {
@@ -116,6 +116,6 @@ describe("InboxItem", () => {
         onTrash={vi.fn()}
       />,
     );
-    expect(screen.getByText("(untitled)")).toBeDefined();
+    expect(screen.getByText("（未命名）")).toBeDefined();
   });
 });

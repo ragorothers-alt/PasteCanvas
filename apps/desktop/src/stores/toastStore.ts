@@ -94,11 +94,11 @@ export function showSuspendNotice(message: string): void {
 /** Convenience: show a dedup notice with "open existing" action. */
 export function showDedupNotice(existingItemId: string): void {
   useToastStore.getState().push({
-    message: "Similar content already exists",
+    message: "已有相似內容",
     variant: "dedup",
     relatedItemId: existingItemId,
     action: {
-      label: "Open existing",
+      label: "開啟既有項目",
       onAction: () => {
         // Dispatch custom event for navigation handlers to open the existing item
         window.dispatchEvent(

@@ -51,18 +51,18 @@ export function PdfPreview({ itemId, maxWidth = 320 }: PdfPreviewProps) {
 
   return (
     <div className="pdf-preview">
-      {state === "loading" && <div className="pdf-preview-loading">Rendering PDF…</div>}
+      {state === "loading" && <div className="pdf-preview-loading">正在轉換 PDF 預覽…</div>}
       {state === "error" && (
-        <div className="pdf-preview-error">Unable to preview this PDF.</div>
+        <div className="pdf-preview-error">無法預覽這份 PDF。</div>
       )}
       <canvas
         ref={canvasRef}
         className="pdf-preview-canvas"
         style={{ display: state === "ready" ? "block" : "none" }}
-        aria-label="PDF first page preview"
+        aria-label="PDF 第一頁預覽"
       />
       {state === "ready" && pageCount != null && (
-        <div className="pdf-preview-meta">{pageCount} page{pageCount === 1 ? "" : "s"}</div>
+        <div className="pdf-preview-meta">{pageCount} 頁</div>
       )}
     </div>
   );

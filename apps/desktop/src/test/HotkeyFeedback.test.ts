@@ -20,7 +20,7 @@ describe("hotkeyFeedback (FND-006 visible + recoverable failures)", () => {
     const msg = hotkeyFailureMessage(["capture_clipboard (already registered)"]);
     expect(msg).toContain("capture_clipboard");
     expect(msg).toContain("already registered");
-    expect(msg).toContain("Settings");
+    expect(msg).toContain("設定");
   });
 
   it("joins multiple failures", () => {

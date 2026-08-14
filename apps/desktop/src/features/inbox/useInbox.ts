@@ -125,7 +125,7 @@ export function useInbox() {
         ),
       );
     } catch (err) {
-      showCaptureError(`Could not update favorite: ${String(err)}`);
+      showCaptureError(`更新收藏失敗：${String(err)}`);
     }
   }, []);
 
@@ -138,7 +138,7 @@ export function useInbox() {
         ),
       );
     } catch (err) {
-      showCaptureError(`Could not update pin: ${String(err)}`);
+      showCaptureError(`更新釘選失敗：${String(err)}`);
     }
   }, []);
 
@@ -147,7 +147,7 @@ export function useInbox() {
       await trashItem(itemId);
       setItems((prev) => prev.filter((item) => item.id !== itemId));
     } catch (err) {
-      showCaptureError(`Could not move item to Trash: ${String(err)}`);
+      showCaptureError(`移至垃圾桶失敗：${String(err)}`);
     }
   }, []);
 

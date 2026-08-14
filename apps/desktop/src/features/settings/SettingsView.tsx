@@ -22,8 +22,34 @@ import {
   optimizeSearchIndex,
 } from "../search/api";
 import type { SearchIndexHealth } from "../search/api";
+import type { ThemeMode } from "../../lib/theme";
+import { Desktop, Moon, Sun } from "@phosphor-icons/react";
 
-export function SettingsView() {
+const HOTKEY_LABELS: Record<string, string> = {
+  capture_clipboard: "擷取剪貼簿",
+  quick_capture: "快速擷取",
+  screenshot: "螢幕截圖",
+  toggle_main_window: "切換主視窗",
+  global_search: "全域搜尋",
+  toggle_capture_session: "切換擷取工作階段",
+};
+
+interface SettingsViewProps {
+  theme?: ThemeMode;
+  onThemeChange?: (theme: ThemeMode) => void;
+}
+
+type SettingsCategory = "general" | "shortcuts" | "integrations" | "search" | "privacy";
+
+const SETTINGS_CATEGORIES: Array<{ id: SettingsCategory; label: string; hint: string }> = [
+  { id: "general", label: "一般", hint: "外觀與視窗行為" },
+  { id: "shortcuts", label: "快捷鍵", hint: "快速操作" },
+  { id: "integrations", label: "整合", hint: "瀏覽器與檔案總管" },
+  { id: "search", label: "搜尋", hint: "索引維護" },
+  { id: "privacy", label: "隱私", hint: "擷取排除" },
+];
+
+export function SettingsView({ theme = "system", onThemeChange }: SettingsViewProps) {
   const [exclusions, setExclusions] = useState<Exclusion[]>([]);
   const [hotkeys, setHotkeys] = useState<HotkeyBinding[]>([]);
   const [newExclusion, setNewExclusion] = useState("");
@@ -37,6 +63,7 @@ export function SettingsView() {
   const [editingValue, setEditingValue] = useState("");
   const [hotkeyMsg, setHotkeyMsg] = useState<string | null>(null);
   const [closeToTray, setCloseToTray] = useState(true);
+  const [activeCategory, setActiveCategory] = useState<SettingsCategory>("general");
 
   const load = useCallback(async () => {
     try {
@@ -93,10 +120,10 @@ export function SettingsView() {
       try {
         await updateHotkey(action, editingValue.trim());
         setEditingHotkey(null);
-        setHotkeyMsg("Hotkey updated — active immediately, no restart needed.");
+        setHotkeyMsg("快捷鍵已更新，立即生效，不需要重新啟動。");
         void load();
       } catch (e) {
-        setHotkeyMsg(`Hotkey update failed: ${String(e)}`);
+        setHotkeyMsg(`快捷鍵更新失敗：${String(e)}`);
       }
     },
     [editingValue, load],
@@ -105,14 +132,14 @@ export function SettingsView() {
   const handleRegisterBrowser = useCallback(async () => {
     setBrowserMsg(null);
     if (!extensionOrigin.trim()) {
-      setBrowserMsg("Enter the extension origin (chrome-extension://<id>/).");
+        setBrowserMsg("請輸入擴充功能來源（chrome-extension://<id>/）。");
       return;
     }
     try {
       await registerBrowserHost(extensionOrigin.trim());
-      setBrowserMsg("Browser capture registered for Chrome and Edge.");
+      setBrowserMsg("已為 Chrome 與 Edge 註冊瀏覽器擷取。");
     } catch (e) {
-      setBrowserMsg(`Registration failed: ${String(e)}`);
+      setBrowserMsg(`註冊失敗：${String(e)}`);
     }
   }, [extensionOrigin]);
 
@@ -120,9 +147,9 @@ export function SettingsView() {
     setBrowserMsg(null);
     try {
       await unregisterBrowserHost();
-      setBrowserMsg("Browser capture unregistered.");
+      setBrowserMsg("已取消註冊瀏覽器擷取。");
     } catch (e) {
-      setBrowserMsg(`Unregister failed: ${String(e)}`);
+      setBrowserMsg(`取消註冊失敗：${String(e)}`);
     }
   }, []);
 
@@ -130,9 +157,9 @@ export function SettingsView() {
     setExplorerMsg(null);
     try {
       await registerExplorerIntegration();
-      setExplorerMsg("Explorer context menu registered (Inbox + last Board).");
+      setExplorerMsg("已註冊檔案總管右鍵選單（收件匣＋最近看板）。");
     } catch (e) {
-      setExplorerMsg(`Registration failed: ${String(e)}`);
+      setExplorerMsg(`註冊失敗：${String(e)}`);
     }
   }, []);
 
@@ -140,9 +167,9 @@ export function SettingsView() {
     setExplorerMsg(null);
     try {
       await unregisterExplorerIntegration();
-      setExplorerMsg("Explorer context menu removed.");
+      setExplorerMsg("已移除檔案總管右鍵選單。");
     } catch (e) {
-      setExplorerMsg(`Unregister failed: ${String(e)}`);
+      setExplorerMsg(`取消註冊失敗：${String(e)}`);
     }
   }, []);
 
@@ -151,11 +178,11 @@ export function SettingsView() {
     try {
       const res = await registerModernExplorerMenu();
       const script = res.sparseManifestPath
-        ? ` Sparse-package script written for the Windows 11 modern menu.`
+        ? ` 已寫入 Windows 11 新版選單的稀疏套件指令碼。`
         : "";
-      setModernMsg(`IExplorerCommand registered.${script}`);
+      setModernMsg(`IExplorerCommand 已註冊。${script}`);
     } catch (e) {
-      setModernMsg(`Registration failed: ${String(e)}`);
+      setModernMsg(`註冊失敗：${String(e)}`);
     }
   }, []);
 
@@ -163,9 +190,9 @@ export function SettingsView() {
     setModernMsg(null);
     try {
       await unregisterModernExplorerMenu();
-      setModernMsg("Modern Explorer menu unregistered.");
+      setModernMsg("已取消註冊新版檔案總管選單。");
     } catch (e) {
-      setModernMsg(`Unregister failed: ${String(e)}`);
+      setModernMsg(`取消註冊失敗：${String(e)}`);
     }
   }, []);
 
@@ -174,9 +201,9 @@ export function SettingsView() {
     try {
       const health = await verifySearchIndex();
       setIndexHealth(health);
-      setIndexMsg(health.healthy ? "Search index is healthy." : "Issues found — run Repair.");
+      setIndexMsg(health.healthy ? "搜尋索引狀態正常。" : "發現問題，請執行修復。");
     } catch (e) {
-      setIndexMsg(`Verify failed: ${String(e)}`);
+      setIndexMsg(`驗證失敗：${String(e)}`);
     }
   }, []);
 
@@ -185,12 +212,12 @@ export function SettingsView() {
     try {
       const res = await rebuildSearchIndex();
       setIndexMsg(
-        `Repaired: ${res.rebuilt} document(s) restored, ${res.removedOrphans} orphan(s) removed.`,
+        `已修復：還原 ${res.rebuilt} 份文件，移除 ${res.removedOrphans} 個孤立項目。`,
       );
       const health = await verifySearchIndex();
       setIndexHealth(health);
     } catch (e) {
-      setIndexMsg(`Repair failed: ${String(e)}`);
+      setIndexMsg(`修復失敗：${String(e)}`);
     }
   }, []);
 
@@ -198,18 +225,59 @@ export function SettingsView() {
     setIndexMsg(null);
     try {
       await optimizeSearchIndex();
-      setIndexMsg("Search index optimized.");
+      setIndexMsg("搜尋索引已最佳化。");
     } catch (e) {
-      setIndexMsg(`Optimize failed: ${String(e)}`);
+      setIndexMsg(`最佳化失敗：${String(e)}`);
     }
   }, []);
 
   return (
     <div className="settings-view">
-      <h2>Settings</h2>
+      <div className="settings-intro">
+        <p className="eyebrow">工作區偏好設定</p>
+        <h2>設定</h2>
+        <p className="settings-lede">調整 PasteCanvas 的視窗、快捷鍵與本機整合方式。</p>
+      </div>
+
+      <div className="settings-layout">
+        <nav className="settings-category-rail" aria-label="設定分類">
+          {SETTINGS_CATEGORIES.map((category) => (
+            <button
+              type="button"
+              key={category.id}
+              className={`settings-category ${activeCategory === category.id ? "active" : ""}`}
+              aria-pressed={activeCategory === category.id}
+              onClick={() => setActiveCategory(category.id)}
+            >
+              <span>{category.label}</span>
+              <small>{category.hint}</small>
+            </button>
+          ))}
+        </nav>
+        <div className="settings-panel">
+      {activeCategory === "general" && <>
+      <section className="settings-section theme-section">
+        <h3>外觀</h3>
+        <p className="settings-hint">選擇介面在不同時間與環境中的顯示方式。</p>
+        <div className="theme-options" role="radiogroup" aria-label="介面主題">
+          {(["light", "dark", "system"] as ThemeMode[]).map((mode) => (
+            <button
+              type="button"
+              key={mode}
+              className={`theme-option ${theme === mode ? "active" : ""}`}
+              role="radio"
+              aria-checked={theme === mode}
+              onClick={() => onThemeChange?.(mode)}
+            >
+              {mode === "light" ? <Sun className="theme-option-icon" aria-hidden="true" /> : mode === "dark" ? <Moon className="theme-option-icon" aria-hidden="true" /> : <Desktop className="theme-option-icon" aria-hidden="true" />}
+              <span>{mode === "light" ? "淺色" : mode === "dark" ? "深色" : "跟隨系統"}</span>
+            </button>
+          ))}
+        </div>
+      </section>
 
       <section className="settings-section">
-        <h3>Window</h3>
+        <h3>視窗</h3>
         <label className="settings-toggle-row">
           <input
             type="checkbox"
@@ -217,31 +285,31 @@ export function SettingsView() {
             onChange={() => void handleToggleCloseToTray()}
           />
           <span>
-            Close button hides to the system tray (uncheck to exit on close)
+            關閉按鈕會縮到系統匣（取消勾選則在關閉時結束程式）
           </span>
         </label>
       </section>
+      </>}
 
-      <section className="settings-section">
-        <h3>Keyboard Shortcuts</h3>
+      {activeCategory === "shortcuts" && <section className="settings-section">
+        <h3>鍵盤快捷鍵</h3>
         <p className="settings-hint">
-          Click a shortcut to change it (e.g., Ctrl+Shift+C). Empty disables the
-          action. Changes take effect immediately.
+          點選快捷鍵即可修改（例如 Ctrl+Shift+C）。留白可停用動作，修改會立即生效。
         </p>
         <div className="hotkey-list">
           {hotkeys.length === 0 && (
-            <div className="hotkey-row empty-state">No shortcuts configured</div>
+            <div className="hotkey-row empty-state">尚未設定快捷鍵</div>
           )}
           {hotkeys.map((hk) => (
             <div key={hk.action} className="hotkey-row">
-              <span className="hotkey-action">{hk.action.replace(/_/g, " ")}</span>
+              <span className="hotkey-action">{HOTKEY_LABELS[hk.action] ?? "快捷鍵動作"}</span>
               {editingHotkey === hk.action ? (
                 <span className="hotkey-edit">
                   <input
                     className="exclusion-input"
                     value={editingValue}
                     autoFocus
-                    placeholder="Ctrl+Shift+… or empty to disable"
+                    placeholder="Ctrl+Shift+…，留白可停用"
                     onChange={(e) => setEditingValue(e.target.value)}
                     onKeyDown={(e) => {
                       if (e.key === "Enter") void handleSaveHotkey(hk.action);
@@ -249,35 +317,35 @@ export function SettingsView() {
                     }}
                   />
                   <button className="btn-add-exclusion" onClick={() => void handleSaveHotkey(hk.action)}>
-                    Save
+                    儲存
                   </button>
                   <button className="btn-add-exclusion" onClick={() => setEditingHotkey(null)}>
-                    Cancel
+                    取消
                   </button>
                 </span>
               ) : (
                 <kbd
                   className="hotkey-accelerator hotkey-editable"
-                  title="Click to change"
+                  title="點選即可修改"
                   onClick={() => {
                     setEditingHotkey(hk.action);
                     setEditingValue(hk.accelerator);
                   }}
                 >
-                  {hk.accelerator || "(disabled)"}
+                  {hk.accelerator || "（已停用）"}
                 </kbd>
               )}
             </div>
           ))}
         </div>
         {hotkeyMsg && <p className="settings-hint">{hotkeyMsg}</p>}
-      </section>
+      </section>}
 
+      {activeCategory === "integrations" && <>
       <section className="settings-section">
-        <h3>Browser Extension</h3>
+        <h3>瀏覽器擴充功能</h3>
         <p className="settings-hint">
-          Register the local capture host so the PasteCanvas browser extension can
-          save pages, selections, and links. Everything stays on this machine.
+          註冊本機擷取主機，讓 PasteCanvas 瀏覽器擴充功能儲存網頁、選取內容與連結。所有資料都留在這台電腦。
         </p>
         <div className="exclusion-add">
           <input
@@ -287,100 +355,96 @@ export function SettingsView() {
             onChange={(e) => setExtensionOrigin(e.target.value)}
           />
           <button className="btn-add-exclusion" onClick={() => void handleRegisterBrowser()}>
-            Register
+            註冊
           </button>
           <button className="btn-add-exclusion" onClick={() => void handleUnregisterBrowser()}>
-            Unregister
+            取消註冊
           </button>
         </div>
         {browserMsg && <p className="settings-hint">{browserMsg}</p>}
       </section>
 
       <section className="settings-section">
-        <h3>Windows Explorer</h3>
+        <h3>Windows 檔案總管</h3>
         <p className="settings-hint">
-          Add right-click entries to send files to the PasteCanvas Inbox or to your
-          most recently used board. Runs as a background process so Explorer never blocks.
+          新增右鍵選單，將檔案送到 PasteCanvas 收件匣或最近使用的看板。以背景程序執行，不會阻塞檔案總管。
         </p>
         <div className="exclusion-add">
           <button className="btn-add-exclusion" onClick={() => void handleRegisterExplorer()}>
-            Register
+            註冊
           </button>
           <button className="btn-add-exclusion" onClick={() => void handleUnregisterExplorer()}>
-            Unregister
+            取消註冊
           </button>
         </div>
         {explorerMsg && <p className="settings-hint">{explorerMsg}</p>}
       </section>
 
       <section className="settings-section">
-        <h3>Modern Explorer Menu (Windows 11)</h3>
+        <h3>新版檔案總管選單（Windows 11）</h3>
         <p className="settings-hint">
-          Registers the IExplorerCommand COM server for the native right-click menu.
-          Also generates a sparse-package script for the Windows 11 modern menu.
+          為原生右鍵選單註冊 IExplorerCommand COM 伺服器，也會產生 Windows 11 新版選單所需的套件指令碼。
         </p>
         <div className="exclusion-add">
           <button className="btn-add-exclusion" onClick={() => void handleRegisterModern()}>
-            Register Modern Menu
+            註冊新版選單
           </button>
           <button className="btn-add-exclusion" onClick={() => void handleUnregisterModern()}>
-            Unregister
+            取消註冊
           </button>
         </div>
         {modernMsg && <p className="settings-hint">{modernMsg}</p>}
       </section>
+      </>}
 
-      <section className="settings-section">
-        <h3>Search Index (SRC-004)</h3>
+      {activeCategory === "search" && <section className="settings-section">
+        <h3>搜尋索引（SRC-004）</h3>
         <p className="settings-hint">
-          Search runs on a derived index of your captured items. Verify checks its
-          integrity; Repair restores any missing entries from the original data
-          (nothing is ever lost); Optimize keeps queries fast.
+          搜尋會使用擷取項目的衍生索引。驗證可檢查完整性；修復會從原始資料還原遺漏項目（不會遺失資料）；最佳化可維持查詢速度。
         </p>
         <div className="exclusion-add">
           <button className="btn-add-exclusion" onClick={() => void handleVerifyIndex()}>
-            Verify
+            驗證
           </button>
           <button className="btn-add-exclusion" onClick={() => void handleRebuildIndex()}>
-            Repair
+            修復
           </button>
           <button className="btn-add-exclusion" onClick={() => void handleOptimizeIndex()}>
-            Optimize
+            最佳化
           </button>
         </div>
         {indexHealth && (
           <p className="settings-hint">
-            {indexHealth.liveItems} item(s) · {indexHealth.indexedDocs} indexed ·{" "}
-            {indexHealth.missingDocs} missing · {indexHealth.orphanDocs} orphan ·
-            FTS unicode {indexHealth.ftsUnicodeOk ? "OK" : "FAIL"} · trigram{" "}
-            {indexHealth.ftsTrigramOk ? "OK" : "FAIL"}
+            即時資料 {indexHealth.liveItems} 項 · 已建立索引 {indexHealth.indexedDocs} 份 ·{" "}
+            遺漏 {indexHealth.missingDocs} 份 · 孤立 {indexHealth.orphanDocs} 份 ·{" "}
+            FTS Unicode {indexHealth.ftsUnicodeOk ? "正常" : "失敗"} · 三元組{" "}
+            {indexHealth.ftsTrigramOk ? "正常" : "失敗"}
           </p>
         )}
         {indexMsg && <p className="settings-hint">{indexMsg}</p>}
-      </section>
-
-      <section className="settings-section">
-        <h3>Capture Exclusions</h3>
+      </section>}
+      {activeCategory === "privacy" && <section className="settings-section">
+        <h3>擷取排除清單</h3>
         <p className="settings-hint">
-          Clipboard capture is skipped for these applications (privacy protection).
+          這些應用程式不會擷取剪貼簿內容（隱私保護）。
         </p>
 
         <div className="exclusion-add">
           <input
             className="exclusion-input"
-            placeholder="Process name (e.g., MyPasswordApp.exe)"
+            placeholder="程序名稱（例如 MyPasswordApp.exe）"
             value={newExclusion}
             onChange={(e) => setNewExclusion(e.target.value)}
             onKeyDown={(e) => { if (e.key === "Enter") void handleAddExclusion(); }}
           />
           <button className="btn-add-exclusion" onClick={() => void handleAddExclusion()}>
-            Add
+            新增
           </button>
         </div>
 
         <ul className="exclusion-list">
           {exclusions.length === 0 && (
-            <li className="exclusion-item empty-state">No exclusions configured</li>
+            <li className="exclusion-item empty-state">尚未設定排除項目</li>
           )}
           {exclusions.map((exc) => (
             <li key={exc.id} className={`exclusion-item ${!exc.enabled ? "disabled" : ""}`}>
@@ -388,16 +452,18 @@ export function SettingsView() {
               <span className="exclusion-source">{exc.source}</span>
               <div className="exclusion-actions">
                 <button onClick={() => void handleToggle(exc.id)}>
-                  {exc.enabled ? "Disable" : "Enable"}
+                  {exc.enabled ? "停用" : "啟用"}
                 </button>
                 {exc.source === "user" && (
-                  <button onClick={() => void handleRemove(exc.id)}>Remove</button>
+                  <button onClick={() => void handleRemove(exc.id)}>移除</button>
                 )}
               </div>
             </li>
           ))}
         </ul>
-      </section>
+      </section>}
+        </div>
+      </div>
     </div>
   );
 }

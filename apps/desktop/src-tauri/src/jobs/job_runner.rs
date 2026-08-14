@@ -27,7 +27,7 @@ pub fn spawn_job_runner(db: AppDatabase, app: tauri::AppHandle) -> Arc<AtomicBoo
     let shutdown = Arc::new(AtomicBool::new(false));
     let shutdown_clone = shutdown.clone();
 
-    tokio::spawn(async move {
+    tauri::async_runtime::spawn(async move {
         tracing::info!(event = "job_runner_started");
         // WIN-004: wall-clock anchor for suspend detection
         let mut last_idle_tick_ms = UnixMs::now().as_millis();

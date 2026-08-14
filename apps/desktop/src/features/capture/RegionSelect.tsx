@@ -142,7 +142,7 @@ export function RegionSelect() {
       role="presentation"
     >
       <div className="region-hint">
-        Drag to select region · Esc to cancel
+        拖曳以選取區域 · Esc 取消
       </div>
       {selectionRect && <div className="region-selection" style={selectionRect} />}
     </div>

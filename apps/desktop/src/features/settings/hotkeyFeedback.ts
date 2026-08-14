@@ -11,8 +11,8 @@ import { getStartupHotkeyFailures } from "./api";
 /** Builds the user-facing message for registration failures. */
 export function hotkeyFailureMessage(failures: string[]): string {
   return (
-    `Global hotkey registration failed: ${failures.join(", ")}. ` +
-    "Another app may be using the shortcut — rebind it in Settings."
+    `全域快捷鍵註冊失敗：${failures.join(", ")}。` +
+    "其他應用程式可能正在使用此快捷鍵，請至設定重新綁定。"
   );
 }
 

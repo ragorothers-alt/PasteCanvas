@@ -19,7 +19,7 @@ export function RichTextEditor({
   content,
   editable = true,
   onChange,
-  placeholder = "Start typing…",
+  placeholder = "開始輸入…",
 }: RichTextEditorProps) {
   const editor = useEditor({
     extensions: [
@@ -72,35 +72,35 @@ export function RichTextEditor({
           <button
             className={`toolbar-btn ${editor.isActive("bold") ? "active" : ""}`}
             onClick={handleBold}
-            title="Bold (Ctrl+B)"
+            title="粗體（Ctrl+B）"
           >
             <strong>B</strong>
           </button>
           <button
             className={`toolbar-btn ${editor.isActive("italic") ? "active" : ""}`}
             onClick={handleItalic}
-            title="Italic (Ctrl+I)"
+            title="斜體（Ctrl+I）"
           >
             <em>I</em>
           </button>
           <button
             className={`toolbar-btn ${editor.isActive("code") ? "active" : ""}`}
             onClick={handleCode}
-            title="Code"
+            title="程式碼"
           >
             {"</>"}
           </button>
           <button
             className={`toolbar-btn ${editor.isActive("heading", { level: 1 }) ? "active" : ""}`}
             onClick={() => editor.chain().focus().toggleHeading({ level: 1 }).run()}
-            title="Heading 1"
+            title="標題 1"
           >
             H1
           </button>
           <button
             className={`toolbar-btn ${editor.isActive("bulletList") ? "active" : ""}`}
             onClick={() => editor.chain().focus().toggleBulletList().run()}
-            title="Bullet List"
+            title="項目符號清單"
           >
             •
           </button>

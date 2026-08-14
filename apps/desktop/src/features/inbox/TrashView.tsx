@@ -8,6 +8,7 @@ import { queryTrash, restoreItem, getTrashStats, emptyTrash } from "./api";
 import type { ItemSummary, TrashStats } from "./api";
 import { InboxItem } from "./InboxItem";
 import { toggleFavorite, togglePin } from "./api";
+import { ArrowCounterClockwise, Trash } from "@phosphor-icons/react";
 
 function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
@@ -59,12 +60,12 @@ export function TrashView() {
     try {
       const res = await emptyTrash();
       setResult(
-        `Permanently deleted ${res.deletedItems} item${res.deletedItems === 1 ? "" : "s"} and ${res.deletedAssets} asset file${res.deletedAssets === 1 ? "" : "s"}.`,
+        `已永久刪除 ${res.deletedItems} 個項目與 ${res.deletedAssets} 個資產檔案。`,
       );
       setConfirming(false);
       void load();
     } catch {
-      setResult("Failed to empty trash.");
+      setResult("清空垃圾桶失敗。");
       setConfirming(false);
     } finally {
       setEmptying(false);
@@ -77,14 +78,14 @@ export function TrashView() {
   return (
     <div className="inbox-view">
       <header className="inbox-header">
-        <h2>Trash</h2>
-        <span className="inbox-count">{items.length} items</span>
+        <h2>垃圾桶</h2>
+        <span className="inbox-count">{items.length} 個項目</span>
         {stats && stats.itemCount > 0 && (
           <span className="trash-size">{formatBytes(stats.totalBytes)}</span>
         )}
         {stats && stats.itemCount > 0 && (
           <button className="btn-empty-trash" onClick={() => setConfirming(true)}>
-            Empty Trash
+            <Trash aria-hidden="true" /> 清空垃圾桶
           </button>
         )}
       </header>
@@ -95,11 +96,9 @@ export function TrashView() {
       {confirming && stats && (
         <div className="trash-confirm-overlay" role="dialog" aria-modal="true">
           <div className="trash-confirm">
-            <h3>Empty Trash?</h3>
+            <h3>要清空垃圾桶嗎？</h3>
             <p>
-              This will permanently delete <strong>{stats.itemCount}</strong> item
-              {stats.itemCount === 1 ? "" : "s"} and free{" "}
-              <strong>{formatBytes(stats.totalBytes)}</strong>. This cannot be undone.
+              這會永久刪除 <strong>{stats.itemCount}</strong> 個項目並釋放 <strong>{formatBytes(stats.totalBytes)}</strong>。此動作無法復原。
             </p>
             <div className="trash-confirm-actions">
               <button
@@ -107,25 +106,25 @@ export function TrashView() {
                 onClick={() => setConfirming(false)}
                 disabled={emptying}
               >
-                Cancel
+                取消
               </button>
               <button
                 className="btn-confirm-empty"
                 onClick={() => void handleEmptyTrash()}
                 disabled={emptying}
               >
-                {emptying ? "Emptying…" : "Empty Trash"}
+                {emptying ? "清空中…" : "清空垃圾桶"}
               </button>
             </div>
           </div>
         </div>
       )}
 
-      {loading && <div className="inbox-loading">Loading…</div>}
+      {loading && <div className="inbox-loading">載入中…</div>}
 
       {!loading && items.length === 0 && (
         <div className="inbox-empty">
-          <p>Trash is empty.</p>
+          <p>垃圾桶是空的。</p>
         </div>
       )}
 
@@ -142,9 +141,9 @@ export function TrashView() {
               <button
                 className="btn-restore"
                 onClick={() => void handleRestore(item.id)}
-                title="Restore to Inbox"
+                title="還原到收件匣"
               >
-                ↩ Restore
+                <ArrowCounterClockwise aria-hidden="true" /> 還原
               </button>
             </div>
           ))}

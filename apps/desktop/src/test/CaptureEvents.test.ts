@@ -15,17 +15,17 @@ describe("captureEvents (CAP-001 PRD feedback)", () => {
   describe("captureFailureMessage", () => {
     it("includes the backend reason", () => {
       expect(captureFailureMessage("Clipboard is empty")).toBe(
-        "Capture failed: Clipboard is empty. You can try again.",
+        "擷取失敗：Clipboard is empty。你可以再試一次。",
       );
     });
 
     it("trims whitespace-only reasons into a fallback", () => {
-      expect(captureFailureMessage("   ")).toContain("unknown error");
+      expect(captureFailureMessage("   ")).toContain("未知錯誤");
     });
 
     it("tolerates non-string payloads", () => {
-      expect(captureFailureMessage(undefined)).toContain("unknown error");
-      expect(captureFailureMessage({ code: 5 })).toContain("unknown error");
+      expect(captureFailureMessage(undefined)).toContain("未知錯誤");
+      expect(captureFailureMessage({ code: 5 })).toContain("未知錯誤");
     });
   });
 

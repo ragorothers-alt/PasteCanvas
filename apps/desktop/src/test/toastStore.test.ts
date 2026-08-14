@@ -67,7 +67,7 @@ describe("toastStore", () => {
       expect(toast.variant).toBe("dedup");
       expect(toast.relatedItemId).toBe(existingId);
       expect(toast.action).toBeDefined();
-      expect(toast.action!.label).toBe("Open existing");
+      expect(toast.action!.label).toBe("開啟既有項目");
     });
 
     it("dedup action dispatches open-item event", () => {

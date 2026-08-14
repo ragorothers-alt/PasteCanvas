@@ -34,6 +34,9 @@ import { startTauriEventBridge } from "./lib/tauriEvents";
 import { subscribeCaptureFeedback } from "./features/capture/captureEvents";
 import { invoke } from "@tauri-apps/api/core";
 import { isTauri } from "./lib/runtime";
+import { applyTheme, getStoredTheme, loadTheme, persistTheme } from "./lib/theme";
+import type { ThemeMode } from "./lib/theme";
+import { ClockCounterClockwise, GearSix, FolderSimple, MagnifyingGlass, Note, PencilSimple, Plus, Star, Trash } from "@phosphor-icons/react";
 
 type View = "inbox" | "board" | "settings" | "trash";
 type SessionState = "active" | "paused" | "finished" | null;
@@ -41,6 +44,7 @@ type SessionState = "active" | "paused" | "finished" | null;
 export function App() {
   const [view, setView] = useState<View>("inbox");
   const [sessionState, setSessionState] = useState<SessionState>(null);
+  const [theme, setTheme] = useState<ThemeMode>(() => getStoredTheme());
   const [boards, setBoards] = useState<BoardSummary[]>([]);
   const [folders, setFolders] = useState<Folder[]>([]);
   const [recentBoards, setRecentBoards] = useState<BoardSummary[]>([]);
@@ -66,6 +70,20 @@ export function App() {
   }, []);
 
   useEffect(() => { void loadBoards(); }, [loadBoards]);
+
+  useEffect(() => {
+    applyTheme(theme);
+  }, [theme]);
+
+  const handleThemeChange = useCallback((nextTheme: ThemeMode) => {
+    setTheme(nextTheme);
+    applyTheme(nextTheme);
+    void persistTheme(nextTheme);
+  }, []);
+
+  useEffect(() => {
+    void loadTheme().then((mode) => { setTheme(mode); applyTheme(mode); });
+  }, []);
 
   // BRD-007: sidebar "Recent" section (best-effort; backend-only feature)
   const loadRecent = useCallback(async () => {
@@ -136,7 +154,7 @@ export function App() {
 
   const handleCreateBoard = useCallback(async () => {
     try {
-      const board = await createBoard(`Board ${boards.length + 1}`);
+      const board = await createBoard(`看板 ${boards.length + 1}`);
       setBoards((prev) => [...prev, board]);
       setBoardStack([board]);
       setView("board");
@@ -146,7 +164,7 @@ export function App() {
   // BRD-006: folder organization
   const handleCreateFolder = useCallback(async () => {
     try {
-      await createFolder(`Folder ${folders.length + 1}`);
+      await createFolder(`資料夾 ${folders.length + 1}`);
       void loadBoards();
     } catch { /* ignore */ }
   }, [folders.length, loadBoards]);
@@ -272,13 +290,14 @@ export function App() {
       </span>
       <button
         className={`btn-board-fav ${b.isFavorite ? "fav" : ""}`}
-        title={b.isFavorite ? "Unfavorite board" : "Favorite board"}
+        title={b.isFavorite ? "取消收藏看板" : "收藏看板"}
+        aria-label={b.isFavorite ? "取消收藏看板" : "收藏看板"}
         onClick={(e) => {
           e.stopPropagation();
           void handleToggleFavorite(b.id);
         }}
       >
-        {b.isFavorite ? "★" : "☆"}
+        <Star weight={b.isFavorite ? "fill" : "regular"} aria-hidden="true" />
       </button>
     </span>
   );
@@ -307,7 +326,7 @@ export function App() {
           }}
           onDrop={(e) => void handleFolderDrop(folder.id, e)}
         >
-          {editingFolderId === folder.id ? (
+              {editingFolderId === folder.id ? (
             <input
               className="exclusion-input nav-folder-rename"
               value={editingFolderName}
@@ -320,33 +339,33 @@ export function App() {
               onBlur={() => void handleSaveFolderName(folder.id)}
             />
           ) : (
-            <span
+              <span
               className="nav-folder-name"
               onDoubleClick={() => {
                 setEditingFolderId(folder.id);
                 setEditingFolderName(folder.name);
               }}
-            >
-              📁 {folder.name}
+              >
+              <FolderSimple aria-hidden="true" /> {folder.name}
             </span>
           )}
           <span className="nav-folder-actions">
             <button
               className="btn-folder-rename"
-              title="Rename folder"
+              title="重新命名資料夾"
               onClick={() => {
                 setEditingFolderId(folder.id);
                 setEditingFolderName(folder.name);
               }}
             >
-              ✏
+              <PencilSimple aria-hidden="true" />
             </button>
             <button
               className="btn-folder-trash"
-              title="Delete folder (boards are kept)"
+              title="刪除資料夾（保留看板）"
               onClick={() => void handleTrashFolder(folder.id)}
             >
-              🗑
+              <Trash aria-hidden="true" />
             </button>
           </span>
         </span>,
@@ -363,34 +382,35 @@ export function App() {
     <main className="app-root">
       <aside className="sidebar">
         <div className="sidebar-brand">
-          <p className="brand-kicker">LOCAL WORKSPACE</p>
+          <p className="brand-kicker">本機工作區</p>
           <h1>PasteCanvas</h1>
-          <p className="brand-note">Capture now. Organize later.</p>
+          <p className="brand-note">先收集，再整理。</p>
         </div>
         <nav className="sidebar-nav">
           <button
             type="button"
+            aria-label="收件匣"
             className={`nav-item ${view === "inbox" ? "active" : ""}`}
             onClick={() => setView("inbox")}
           >
-            <span className="nav-glyph" aria-hidden="true">▣</span><span>Inbox</span>
+            <Note className="nav-glyph" aria-hidden="true" /><span>收件匣</span>
           </button>
           <button type="button" className={`nav-item ${view === "inbox" ? "" : ""}`} onClick={() => {
             setView("inbox");
             window.dispatchEvent(new CustomEvent("paste-canvas://search-command", { detail: { query: "favorite:true" } }));
-          }} title="Show favorite items">
-            <span className="nav-glyph" aria-hidden="true">☆</span><span>Favorites</span>
+          }} title="顯示收藏項目">
+            <Star className="nav-glyph" aria-hidden="true" /><span>收藏</span>
           </button>
-          <button type="button" className="nav-item nav-search-link" onClick={() => {
+          <button type="button" aria-label="搜尋" className="nav-item nav-search-link" onClick={() => {
             setView("inbox");
             window.dispatchEvent(new Event("paste-canvas://focus-search"));
           }}>
-            <span className="nav-glyph" aria-hidden="true">⌕</span><span>Search</span><kbd>Ctrl K</kbd>
+            <MagnifyingGlass className="nav-glyph" aria-hidden="true" /><span>搜尋</span><kbd>Ctrl K</kbd>
           </button>
           {recentBoards.length > 0 && (
             <div className="nav-section nav-recent">
               <div className="nav-section-header">
-                <span>Recent boards</span>
+                <span>最近看板</span>
               </div>
               {recentBoards.map((b) => (
                 <button
@@ -399,17 +419,17 @@ export function App() {
                   className={`nav-item nav-board ${view === "board" && activeBoard?.id === b.id ? "active" : ""}`}
                   onClick={() => handleSelectBoard(b)}
                 >
-                  <span className="nav-glyph" aria-hidden="true">◷</span><span>{b.name}</span>
+                  <ClockCounterClockwise className="nav-glyph" aria-hidden="true" /><span>{b.name}</span>
                 </button>
               ))}
             </div>
           )}
           <div className="nav-section">
             <div className="nav-section-header">
-              <span>Boards</span>
+              <span>看板</span>
               <span className="nav-section-actions">
-                <button type="button" className="btn-add-board btn-wide" title="New folder" onClick={() => void handleCreateFolder()}>Folder +</button>
-                <button type="button" className="btn-add-board" title="New board" onClick={() => void handleCreateBoard()}>+</button>
+                <button type="button" className="btn-add-board btn-wide" title="新增資料夾" onClick={() => void handleCreateFolder()}><FolderSimple size={15} /> <span>資料夾</span></button>
+                <button type="button" className="btn-add-board" title="新增看板" onClick={() => void handleCreateBoard()}><Plus size={16} /></button>
               </span>
             </div>
             {tree.flatMap((node) => renderTreeNode(node, 0))}
@@ -418,17 +438,19 @@ export function App() {
             <SessionControl />
             <button
               type="button"
+              aria-label="垃圾桶"
               className={`nav-item ${view === "trash" ? "active" : ""}`}
               onClick={() => setView("trash")}
             >
-              <span className="nav-glyph" aria-hidden="true">⌫</span><span>Trash</span>
+              <Trash className="nav-glyph" aria-hidden="true" /><span>垃圾桶</span>
             </button>
             <button
               type="button"
+              aria-label="設定"
               className={`nav-item ${view === "settings" ? "active" : ""}`}
               onClick={() => setView("settings")}
             >
-              <span className="nav-glyph" aria-hidden="true">⚙</span><span>Settings</span>
+              <GearSix className="nav-glyph" aria-hidden="true" /><span>設定</span>
             </button>
           </div>
         </nav>
@@ -439,14 +461,14 @@ export function App() {
           <div className="command-context">
             <span className="context-mark" aria-hidden="true" />
             <div>
-              <p className="eyebrow">Workspace</p>
-              <p className="command-title">{view === "board" && activeBoard ? activeBoard.name : view === "settings" ? "Settings" : view === "trash" ? "Trash" : "Inbox"}</p>
+              <p className="eyebrow">工作區</p>
+              <p className="command-title">{view === "board" && activeBoard ? activeBoard.name : view === "settings" ? "設定" : view === "trash" ? "垃圾桶" : "收件匣"}</p>
             </div>
           </div>
           <SearchBar />
-          <div className="command-status" aria-label="Capture status">
+          <div className="command-status" aria-label="擷取狀態">
             <span className={`status-dot ${sessionState ?? "idle"}`} aria-hidden="true" />
-            <span>{sessionState === "active" ? "Collecting · session active" : sessionState === "paused" ? "Session paused" : "Local-only · monitoring off"}</span>
+            <span>{sessionState === "active" ? "收集中 · 工作階段進行中" : sessionState === "paused" ? "工作階段已暫停" : "僅限本機 · 未監看"}</span>
           </div>
           <button type="button" className="command-capture" onClick={() => {
             setView("inbox");
@@ -457,8 +479,8 @@ export function App() {
             } else {
               window.dispatchEvent(new Event("pastecanvas://focus-capture"));
             }
-          }} aria-label="Open capture workspace">
-            <span aria-hidden="true">+</span> Capture
+          }} aria-label="開啟快速擷取">
+            <Plus aria-hidden="true" /> 擷取
           </button>
         </header>
         {view === "inbox" && (
@@ -470,7 +492,7 @@ export function App() {
         {view === "board" && activeBoard && (
           <>
             {boardStack.length > 1 && (
-              <nav className="board-breadcrumb" aria-label="Board navigation">
+              <nav className="board-breadcrumb" aria-label="看板導覽">
                 {boardStack.map((b, i) => (
                   <span key={b.id} className="breadcrumb-item">
                     {i > 0 && <span className="breadcrumb-sep">›</span>}
@@ -491,7 +513,7 @@ export function App() {
             />
           </>
         )}
-        {view === "settings" && <SettingsView />}
+        {view === "settings" && <SettingsView theme={theme} onThemeChange={handleThemeChange} />}
         {view === "trash" && <TrashView />}
       </div>
 

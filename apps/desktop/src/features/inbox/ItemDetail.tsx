@@ -6,9 +6,11 @@ import { detectLanguage } from "../../adapters/code/CodeMirrorAdapter";
 import { TagSelector } from "../tags/TagSelector";
 import { PdfPreview } from "./PdfPreview";
 import { ImagePreview } from "./ImagePreview";
+import { ArrowSquareOut, FloppyDisk, X } from "@phosphor-icons/react";
 
 // Item types that have a managed asset file on disk (INB-003 reveal)
 const ASSET_TYPES = new Set(["image", "screenshot", "pdf", "font", "svg", "file"]);
+const ITEM_TYPE_LABELS: Record<string, string> = { plain_text: "文字", link: "連結", image: "圖片", screenshot: "螢幕截圖", pdf: "PDF", code: "程式碼", color: "色彩", font: "字型", file: "檔案", svg: "SVG" };
 
 interface ItemDetailProps {
   item: ItemSummary;
@@ -61,15 +63,15 @@ export function ItemDetail({ item, onClose, onUpdated }: ItemDetailProps) {
   return (
     <div className="item-detail">
       <div className="detail-header">
-        <button className="btn-close-detail" onClick={onClose}>✕</button>
-        <span className="detail-type">{item.itemType}</span>
+        <button className="btn-close-detail" onClick={onClose} aria-label="關閉詳細資料"><X aria-hidden="true" /></button>
+        <span className="detail-type">{ITEM_TYPE_LABELS[item.itemType] ?? item.itemType}</span>
         {ASSET_TYPES.has(item.itemType) && (
           <button
             className="btn-reveal-asset"
             onClick={() => void handleReveal()}
-            title="Reveal managed asset in file explorer"
+            title="在檔案總管顯示資產"
           >
-            📁 Reveal
+            <ArrowSquareOut aria-hidden="true" /> 顯示檔案
           </button>
         )}
       </div>
@@ -87,10 +89,10 @@ export function ItemDetail({ item, onClose, onUpdated }: ItemDetailProps) {
             />
             <div className="detail-edit-actions">
               <button onClick={() => void handleSave()} disabled={saving}>
-                {saving ? "Saving…" : "Save"}
+                {saving ? "儲存中…" : <><FloppyDisk aria-hidden="true" /> 儲存</>}
               </button>
               <button onClick={() => { setEditing(false); setTitle(item.title ?? ""); }}>
-                Cancel
+                取消
               </button>
             </div>
             {error && <div className="detail-error">{error}</div>}
@@ -99,9 +101,9 @@ export function ItemDetail({ item, onClose, onUpdated }: ItemDetailProps) {
           <h3
             className="detail-title"
             onClick={() => setEditing(true)}
-            title="Click to edit title"
+            title="點選即可編輯標題"
           >
-            {item.title ?? item.textPreview ?? "(untitled)"}
+            {item.title ?? item.textPreview ?? "(未命名)"}
           </h3>
         )}
       </div>
@@ -138,25 +140,25 @@ export function ItemDetail({ item, onClose, onUpdated }: ItemDetailProps) {
 
       <div className="detail-meta">
         <div className="meta-row">
-          <span className="meta-label">Tags</span>
+          <span className="meta-label">標籤</span>
         </div>
         <TagSelector itemId={item.id} />
         {item.sourceApp && (
           <div className="meta-row">
-            <span className="meta-label">Source</span>
+            <span className="meta-label">來源</span>
             <span className="meta-value">{item.sourceApp}</span>
           </div>
         )}
         <div className="meta-row">
-          <span className="meta-label">Method</span>
-          <span className="meta-value">{item.captureMethod.replace(/_/g, " ")}</span>
+          <span className="meta-label">方式</span>
+            <span className="meta-value">{item.captureMethod.replace(/_/g, " ")}</span>
         </div>
         <div className="meta-row">
-          <span className="meta-label">Status</span>
+          <span className="meta-label">狀態</span>
           <span className="meta-value">{item.inboxStatus}</span>
         </div>
         <div className="meta-row">
-          <span className="meta-label">Captured</span>
+          <span className="meta-label">擷取時間</span>
           <span className="meta-value">{new Date(item.createdAt).toLocaleString()}</span>
         </div>
       </div>

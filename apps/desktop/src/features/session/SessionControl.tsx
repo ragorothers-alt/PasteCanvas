@@ -4,6 +4,7 @@ import type { SessionInfo } from "./api";
 import { isTauri } from "../../lib/runtime";
 import { showSuspendNotice } from "../../stores/toastStore";
 import { TOGGLE_CAPTURE_PAUSE_EVENT, toggleCapturePause } from "./sessionToggle";
+import { Pause, Play, Stop, Circle } from "@phosphor-icons/react";
 
 export function SessionControl() {
   const [session, setSession] = useState<SessionInfo | null>(null);
@@ -34,7 +35,7 @@ export function SessionControl() {
       .then(({ listen }) =>
         listen<number>("paste-canvas://session-suspended", () => {
           void refresh();
-          showSuspendNotice("System slept — capture session paused. Resume when ready.");
+          showSuspendNotice("系統休眠，擷取工作階段已暫停。準備好後請手動恢復。");
         }),
       )
       .then((u) => {
@@ -92,8 +93,8 @@ export function SessionControl() {
   if (!session) {
     return (
       <div className="session-control">
-        <button className="btn-session-start" onClick={() => void handleStart()} title="Start capture session">
-          ● Start Session
+        <button className="btn-session-start" onClick={() => void handleStart()} title="開始擷取工作階段">
+          <Circle weight="fill" aria-hidden="true" /> 開始工作階段
         </button>
       </div>
     );
@@ -104,23 +105,23 @@ export function SessionControl() {
       <div className="session-indicator">
         <span className={`session-dot ${session.state}`} />
         <span className="session-label">
-          {session.state === "active" ? "Recording" : "Paused"}
+          {session.state === "active" ? "擷取中" : "已暫停"}
           {session.itemCount > 0 && ` (${session.itemCount})`}
         </span>
       </div>
       <div className="session-actions">
         {session.state === "active" && (
-          <button className="btn-session-pause" onClick={() => void handlePause()}>
-            ⏸
+          <button className="btn-session-pause" onClick={() => void handlePause()} aria-label="暫停擷取">
+            <Pause aria-hidden="true" />
           </button>
         )}
         {session.state === "paused" && (
-          <button className="btn-session-resume" onClick={() => void handleResume()}>
-            ▶
+          <button className="btn-session-resume" onClick={() => void handleResume()} aria-label="恢復擷取">
+            <Play aria-hidden="true" />
           </button>
         )}
-        <button className="btn-session-stop" onClick={() => void handleFinish()}>
-          ⏹
+        <button className="btn-session-stop" onClick={() => void handleFinish()} aria-label="結束工作階段">
+            <Stop aria-hidden="true" />
         </button>
       </div>
     </div>

@@ -42,15 +42,15 @@ export function ImagePreview({ itemId, maxDimension = 480 }: ImagePreviewProps) 
 
   return (
     <div className="image-preview">
-      {state === "loading" && <div className="image-preview-loading">Loading preview…</div>}
+      {state === "loading" && <div className="image-preview-loading">載入預覽中…</div>}
       {state === "error" && (
-        <div className="image-preview-error">Unable to preview this image.</div>
+        <div className="image-preview-error">無法預覽這張圖片。</div>
       )}
       {state === "ready" && dataUrl && (
         <img
           className="image-preview-img"
           src={dataUrl}
-          alt="Captured image preview"
+          alt="已擷取圖片的預覽"
           style={{ maxWidth: maxDimension, maxHeight: maxDimension }}
         />
       )}

@@ -100,7 +100,7 @@ export function TagSelector({ itemId }: TagSelectorProps) {
         {itemTags.map((tag) => (
           <span key={tag.id} className="tag-chip" style={tag.color ? { borderColor: tag.color } : undefined}>
             {tag.name}
-            <button className="tag-remove" onClick={() => void handleRemove(tag.id)}>
+          <button className="tag-remove" onClick={() => void handleRemove(tag.id)} aria-label={`移除標籤 ${tag.name}`}>
               ×
             </button>
           </span>
@@ -109,7 +109,7 @@ export function TagSelector({ itemId }: TagSelectorProps) {
       <div className="tag-input-wrapper">
         <input
           className="tag-input"
-          placeholder="Add tag…"
+          placeholder="新增標籤…"
           value={input}
           onChange={(e) => {
             setInput(e.target.value);

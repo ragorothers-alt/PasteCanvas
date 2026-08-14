@@ -11,8 +11,10 @@ import {
   navigateToBoard,
 } from "./searchActions";
 import { showCaptureSuccess } from "../../stores/toastStore";
+import { ArrowSquareOut, Copy, MapPin, MagnifyingGlass, Star } from "@phosphor-icons/react";
 
 const TYPE_FILTERS = ["plain_text", "link", "image", "pdf", "code"] as const;
+const TYPE_LABELS: Record<string, string> = { plain_text: "文字", link: "連結", image: "圖片", pdf: "PDF", code: "程式碼" };
 
 export function SearchBar() {
   const [query, setQuery] = useState("");
@@ -94,12 +96,12 @@ export function SearchBar() {
   return (
     <div className="search-container">
       <div className="search-bar">
-        <span className="search-icon" aria-hidden="true">🔍</span>
+        <MagnifyingGlass className="search-icon" aria-hidden="true" />
         <input
           ref={inputRef}
           className="search-input"
           type="text"
-          placeholder="Search… (supports type: source: domain: board: after: before: favorite: inbox: session:)"
+          placeholder="搜尋…（支援 type: source: domain: board: after: before: favorite: inbox: session:）"
           value={query}
           onChange={(e) => handleChange(e.target.value)}
           onKeyDown={(e) => {
@@ -116,7 +118,7 @@ export function SearchBar() {
             className={`filter-chip ${activeFilter === t ? "active" : ""}`}
             onClick={() => handleFilterClick(t)}
           >
-            {t}
+            {TYPE_LABELS[t] ?? t}
           </button>
         ))}
       </div>
@@ -124,7 +126,7 @@ export function SearchBar() {
       {hasSearched && (
         <div className="search-results">
           {results.length === 0 && (
-            <div className="search-empty">No results found.</div>
+            <div className="search-empty">找不到結果。</div>
           )}
           {results.map((r) => (
             <div key={r.itemId} className="search-result-item">
@@ -138,11 +140,11 @@ export function SearchBar() {
                 }}
               >
                 <div className="result-title">
-                  {r.isFavorite && <span>★ </span>}
-                  {r.title || r.bodySnippet || "(untitled)"}
+                  {r.isFavorite && <Star weight="fill" aria-hidden="true" />}
+                  {r.title || r.bodySnippet || "(未命名)"}
                 </div>
                 <div className="result-meta">
-                  <span className="result-type">{r.itemType}</span>
+                  <span className="result-type">{TYPE_LABELS[r.itemType] ?? r.itemType}</span>
                   {r.domain && <span className="result-domain">{r.domain}</span>}
                   {r.sourceApp && <span className="result-source">{r.sourceApp}</span>}
                 </div>
@@ -151,49 +153,53 @@ export function SearchBar() {
               <div className="result-actions">
                 <button
                   className="result-action"
-                  title="Copy content"
+                  title="複製內容"
+                  aria-label="複製內容"
                   onClick={() => {
                     void copyItemContent(r.itemId).then((copied) => {
-                      if (copied !== null) showCaptureSuccess("Copied");
+                      if (copied !== null) showCaptureSuccess("已複製");
                     });
                   }}
                 >
-                  ⧉
+                  <Copy aria-hidden="true" />
                 </button>
                 <button
                   className="result-action"
-                  title={r.isFavorite ? "Unfavorite" : "Favorite"}
+                  title={r.isFavorite ? "取消收藏" : "加入收藏"}
+                  aria-label={r.isFavorite ? "取消收藏" : "加入收藏"}
                   onClick={() => {
                     void favoriteItem(r.itemId).then(() => void doSearch(query, activeFilter));
                   }}
                 >
-                  {r.isFavorite ? "★" : "☆"}
+                  <Star weight={r.isFavorite ? "fill" : "regular"} aria-hidden="true" />
                 </button>
                 {r.url && (
                   <button
-                    className="result-action"
-                    title="Open source"
+                  className="result-action"
+                  title="開啟來源"
+                  aria-label="開啟來源"
                     onClick={() => {
                       void openItemSource(r.itemId);
                     }}
                   >
-                    ↗
+                    <ArrowSquareOut aria-hidden="true" />
                   </button>
                 )}
                 <button
                   className="result-action"
-                  title="Locate on board"
+                  title="在看板中定位"
+                  aria-label="在看板中定位"
                   onClick={() => {
                     void locateItemBoards(r.itemId).then((boards) => {
                       if (boards.length > 0) {
                         navigateToBoard(boards[0]!.boardId);
                       } else {
-                        showCaptureSuccess("Not on any board yet");
+                        showCaptureSuccess("尚未加入任何看板");
                       }
                     });
                   }}
                 >
-                  🗺
+                  <MapPin aria-hidden="true" />
                 </button>
               </div>
             </div>

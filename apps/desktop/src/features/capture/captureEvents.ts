@@ -13,8 +13,8 @@ export function captureFailureMessage(reason: unknown): string {
   const detail =
     typeof reason === "string" && reason.trim().length > 0
       ? reason.trim()
-      : "unknown error";
-  return `Capture failed: ${detail}. You can try again.`;
+      : "未知錯誤";
+  return `擷取失敗：${detail}。你可以再試一次。`;
 }
 
 /** Shows the failure toast with an understandable reason (CAP-001). */
@@ -27,7 +27,7 @@ export function notifyCaptureFailure(reason: unknown): void {
 
 /** Shows the lightweight success toast (CAP-001). */
 export function notifyCaptureSuccess(): void {
-  showCaptureSuccess("Captured to Inbox");
+  showCaptureSuccess("已擷取至收件匣");
 }
 
 /** All window event names carrying capture outcomes (backend emitters). */
