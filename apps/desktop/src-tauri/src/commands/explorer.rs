@@ -34,99 +34,34 @@ pub async fn register_explorer_integration(_state: State<'_, AppState>) -> Resul
 
     #[cfg(target_os = "windows")]
     {
-        use std::process::Command;
+        use crate::platform::windows::reg;
 
         // "Send to PasteCanvas Inbox" — all files
         let inbox_key = format!(r"HKCR\*\shell\{MENU_INBOX}");
-        let _ = Command::new("reg")
-            .args([
-                "add",
-                &inbox_key,
-                "/ve",
-                "/t",
-                "REG_SZ",
-                "/d",
-                "Send to PasteCanvas Inbox",
-                "/f",
-            ])
-            .output();
+        reg::add_default(&inbox_key, "Send to PasteCanvas Inbox")?;
         let inbox_cmd = format!(r"HKCR\*\shell\{MENU_INBOX}\command");
         let inbox_cmdline = format!("\"{exe_str}\" \"%1\"");
-        let _ = Command::new("reg")
-            .args([
-                "add",
-                &inbox_cmd,
-                "/ve",
-                "/t",
-                "REG_SZ",
-                "/d",
-                &inbox_cmdline,
-                "/f",
-            ])
-            .output();
+        reg::add_default(&inbox_cmd, &inbox_cmdline)?;
 
         // "Send to PasteCanvas last Board" — all files
         let board_key = format!(r"HKCR\*\shell\{MENU_BOARD}");
-        let _ = Command::new("reg")
-            .args([
-                "add",
-                &board_key,
-                "/ve",
-                "/t",
-                "REG_SZ",
-                "/d",
-                "Send to PasteCanvas Board",
-                "/f",
-            ])
-            .output();
+        reg::add_default(&board_key, "Send to PasteCanvas Board")?;
         let board_cmd = format!(r"HKCR\*\shell\{MENU_BOARD}\command");
         let board_cmdline = format!("\"{exe_str}\" --board \"%1\"");
-        let _ = Command::new("reg")
-            .args([
-                "add",
-                &board_cmd,
-                "/ve",
-                "/t",
-                "REG_SZ",
-                "/d",
-                &board_cmdline,
-                "/f",
-            ])
-            .output();
+        reg::add_default(&board_cmd, &board_cmdline)?;
 
         // Directory (folder) entries — capture folder contents is out of scope for v1,
         // but we register the Inbox entry on directories for future use.
         let dir_key = format!(r"HKCR\Directory\shell\{MENU_INBOX}");
-        let _ = Command::new("reg")
-            .args([
-                "add",
-                &dir_key,
-                "/ve",
-                "/t",
-                "REG_SZ",
-                "/d",
-                "Send to PasteCanvas Inbox",
-                "/f",
-            ])
-            .output();
+        reg::add_default(&dir_key, "Send to PasteCanvas Inbox")?;
         let dir_cmd = format!(r"HKCR\Directory\shell\{MENU_INBOX}\command");
-        let _ = Command::new("reg")
-            .args([
-                "add",
-                &dir_cmd,
-                "/ve",
-                "/t",
-                "REG_SZ",
-                "/d",
-                &inbox_cmdline,
-                "/f",
-            ])
-            .output();
+        reg::add_default(&dir_cmd, &inbox_cmdline)?;
     }
 
     #[cfg(not(target_os = "windows"))]
     {
         let _ = _state;
+        return Err("explorer integration is only supported on Windows".to_string());
     }
 
     tracing::info!(event = "explorer_integration_registered", exe = %exe_str);
@@ -138,14 +73,14 @@ pub async fn register_explorer_integration(_state: State<'_, AppState>) -> Resul
 pub async fn unregister_explorer_integration() -> Result<(), String> {
     #[cfg(target_os = "windows")]
     {
-        use std::process::Command;
+        use crate::platform::windows::reg;
         let keys = [
             format!(r"HKCR\*\shell\{MENU_INBOX}"),
             format!(r"HKCR\*\shell\{MENU_BOARD}"),
             format!(r"HKCR\Directory\shell\{MENU_INBOX}"),
         ];
         for key in keys {
-            let _ = Command::new("reg").args(["delete", &key, "/f"]).output();
+            reg::delete_key(&key)?;
         }
     }
     tracing::info!(event = "explorer_integration_unregistered");

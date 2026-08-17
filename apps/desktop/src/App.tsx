@@ -19,6 +19,9 @@ import {
   getRecentBoards,
   reorderBoards,
   reorderFolders,
+  renameBoard,
+  trashBoard,
+  moveBoard,
 } from "./features/boards/api";
 import type { BoardSummary, Folder } from "./features/boards/api";
 import { buildBoardTree } from "./features/boards/boardTree";
@@ -51,6 +54,9 @@ export function App() {
   // BRD-007: inline folder rename state
   const [editingFolderId, setEditingFolderId] = useState<string | null>(null);
   const [editingFolderName, setEditingFolderName] = useState("");
+  const [editingBoardId, setEditingBoardId] = useState<string | null>(null);
+  const [editingBoardName, setEditingBoardName] = useState("");
+  const [pendingOpenItemId, setPendingOpenItemId] = useState<string | null>(null);
   // BRD-004: navigation stack for nested boards (last = current)
   const [boardStack, setBoardStack] = useState<BoardSummary[]>([]);
   const activeBoard = boardStack.length > 0 ? boardStack[boardStack.length - 1] : null;
@@ -108,8 +114,8 @@ export function App() {
       const state = (event as CustomEvent<{ state: SessionState }>).detail?.state ?? null;
       setSessionState(state);
     };
-    window.addEventListener("pastecanvas://session-state", handler);
-    return () => window.removeEventListener("pastecanvas://session-state", handler);
+    window.addEventListener("paste-canvas://session-state", handler);
+    return () => window.removeEventListener("paste-canvas://session-state", handler);
   }, []);
 
   // WIN-005: forward backend Tauri events (tray/hotkeys) to window listeners
@@ -152,6 +158,17 @@ export function App() {
     return () => window.removeEventListener("paste-canvas://open-board", handler);
   }, []);
 
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const itemId = (e as CustomEvent<{ itemId: string }>).detail?.itemId;
+      if (!itemId) return;
+      setView("inbox");
+      setPendingOpenItemId(itemId);
+    };
+    window.addEventListener("paste-canvas://open-item", handler);
+    return () => window.removeEventListener("paste-canvas://open-item", handler);
+  }, []);
+
   const handleCreateBoard = useCallback(async () => {
     try {
       const board = await createBoard(`看板 ${boards.length + 1}`);
@@ -192,6 +209,33 @@ export function App() {
       void loadBoards();
     },
     [editingFolderName, loadBoards],
+  );
+
+  const handleSaveBoardName = useCallback(
+    async (boardId: string) => {
+      const name = editingBoardName.trim();
+      if (name) {
+        try {
+          await renameBoard(boardId, name);
+        } catch { /* ignore */ }
+      }
+      setEditingBoardId(null);
+      void loadBoards();
+    },
+    [editingBoardName, loadBoards],
+  );
+
+  const handleTrashBoard = useCallback(
+    async (boardId: string) => {
+      try {
+        await trashBoard(boardId);
+        setBoardStack((prev) => prev.filter((b) => b.id !== boardId));
+        setView((current) => (activeBoard?.id === boardId ? "inbox" : current));
+        void loadBoards();
+        void loadRecent();
+      } catch { /* ignore */ }
+    },
+    [activeBoard?.id, loadBoards, loadRecent],
   );
 
   const handleToggleFavorite = useCallback(
@@ -285,20 +329,58 @@ export function App() {
       }}
       onDrop={(e) => void handleBoardDrop(b.id, e)}
     >
-      <span className="nav-board-name" onClick={() => handleSelectBoard(b)}>
-        {b.name}
+      {editingBoardId === b.id ? (
+        <input
+          className="exclusion-input nav-folder-rename"
+          value={editingBoardName}
+          autoFocus
+          onChange={(e) => setEditingBoardName(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") void handleSaveBoardName(b.id);
+            if (e.key === "Escape") setEditingBoardId(null);
+          }}
+          onBlur={() => void handleSaveBoardName(b.id)}
+          onClick={(e) => e.stopPropagation()}
+        />
+      ) : (
+        <span className="nav-board-name" onClick={() => handleSelectBoard(b)}>
+          {b.name}
+        </span>
+      )}
+      <span className="nav-folder-actions">
+        <button
+          className={`btn-board-fav ${b.isFavorite ? "fav" : ""}`}
+          title={b.isFavorite ? "取消收藏看板" : "收藏看板"}
+          aria-label={b.isFavorite ? "取消收藏看板" : "收藏看板"}
+          onClick={(e) => {
+            e.stopPropagation();
+            void handleToggleFavorite(b.id);
+          }}
+        >
+          <Star weight={b.isFavorite ? "fill" : "regular"} aria-hidden="true" />
+        </button>
+        <button
+          className="btn-folder-rename"
+          title="重新命名看板"
+          onClick={(e) => {
+            e.stopPropagation();
+            setEditingBoardId(b.id);
+            setEditingBoardName(b.name);
+          }}
+        >
+          <PencilSimple aria-hidden="true" />
+        </button>
+        <button
+          className="btn-folder-trash"
+          title="刪除看板"
+          onClick={(e) => {
+            e.stopPropagation();
+            void handleTrashBoard(b.id);
+          }}
+        >
+          <Trash aria-hidden="true" />
+        </button>
       </span>
-      <button
-        className={`btn-board-fav ${b.isFavorite ? "fav" : ""}`}
-        title={b.isFavorite ? "取消收藏看板" : "收藏看板"}
-        aria-label={b.isFavorite ? "取消收藏看板" : "收藏看板"}
-        onClick={(e) => {
-          e.stopPropagation();
-          void handleToggleFavorite(b.id);
-        }}
-      >
-        <Star weight={b.isFavorite ? "fill" : "regular"} aria-hidden="true" />
-      </button>
     </span>
   );
 
@@ -318,13 +400,23 @@ export function App() {
             e.dataTransfer.effectAllowed = "move";
           }}
           onDragOver={(e) => {
-            if (Array.from(e.dataTransfer.types).includes(FOLDER_DRAG_TYPE)) {
+            const types = Array.from(e.dataTransfer.types);
+            if (types.includes(FOLDER_DRAG_TYPE) || types.includes(BOARD_DRAG_TYPE)) {
               e.preventDefault();
               e.stopPropagation();
               e.dataTransfer.dropEffect = "move";
             }
           }}
-          onDrop={(e) => void handleFolderDrop(folder.id, e)}
+          onDrop={(e) => {
+            const boardId = e.dataTransfer.getData(BOARD_DRAG_TYPE);
+            if (boardId) {
+              e.preventDefault();
+              e.stopPropagation();
+              void moveBoard(boardId, folder.id).then(() => loadBoards()).catch(() => undefined);
+              return;
+            }
+            void handleFolderDrop(folder.id, e);
+          }}
         >
               {editingFolderId === folder.id ? (
             <input
@@ -474,10 +566,10 @@ export function App() {
             setView("inbox");
             if (isTauri()) {
               void invoke("show_quick_capture").catch(() => {
-                window.dispatchEvent(new Event("pastecanvas://focus-capture"));
+                window.dispatchEvent(new Event("paste-canvas://focus-capture"));
               });
             } else {
-              window.dispatchEvent(new Event("pastecanvas://focus-capture"));
+              window.dispatchEvent(new Event("paste-canvas://focus-capture"));
             }
           }} aria-label="開啟快速擷取">
             <Plus aria-hidden="true" /> 擷取
@@ -486,7 +578,10 @@ export function App() {
         {view === "inbox" && (
           <>
             <QuickCapture />
-            <InboxView />
+            <InboxView
+              openItemId={pendingOpenItemId}
+              onOpenItemHandled={() => setPendingOpenItemId(null)}
+            />
           </>
         )}
         {view === "board" && activeBoard && (

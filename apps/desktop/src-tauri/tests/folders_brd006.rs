@@ -44,6 +44,24 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn move_board_into_folder_and_back_to_root() {
+        let (_db, svc) = setup().await;
+        let folder = svc.create_folder("Work", None).await.expect("folder");
+        let board = svc.create_board("Loose", None).await.expect("board");
+        assert!(board.folder_id.is_none());
+
+        svc.move_board(&board.id, Some(&folder.id))
+            .await
+            .expect("move in");
+        let boards = svc.list_boards().await.expect("list");
+        assert_eq!(boards[0].folder_id.as_deref(), Some(folder.id.as_str()));
+
+        svc.move_board(&board.id, None).await.expect("move out");
+        let boards = svc.list_boards().await.expect("list after");
+        assert!(boards[0].folder_id.is_none());
+    }
+
+    #[tokio::test]
     async fn create_folder_rejects_missing_or_trashed_parent() {
         let (_db, svc) = setup().await;
         let err = svc

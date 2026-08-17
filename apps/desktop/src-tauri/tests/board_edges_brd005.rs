@@ -220,4 +220,52 @@ mod tests {
         assert_eq!(snapshot.edges.len(), 1);
         assert_eq!(snapshot.edges[0].source_node_id, node_ids[0]);
     }
+
+    #[tokio::test]
+    async fn cross_board_edge_is_rejected() {
+        let db = setup().await;
+        let device = EntityId::new();
+        let board_svc = BoardService::new(db.clone(), device.clone());
+        let capture_svc = CaptureService::new(db.clone(), device.clone());
+
+        let board_a = board_svc.create_board("A", None).await.expect("board a");
+        let board_b = board_svc.create_board("B", None).await.expect("board b");
+
+        let item_a = capture_svc
+            .capture_text(CaptureTextRequest {
+                text: "on A".to_string(),
+                capture_method: CaptureMethod::ManualHotkey,
+                source_app: None,
+                window_title: None,
+            })
+            .await
+            .expect("item a");
+        let item_b = capture_svc
+            .capture_text(CaptureTextRequest {
+                text: "on B".to_string(),
+                capture_method: CaptureMethod::ManualHotkey,
+                source_app: None,
+                window_title: None,
+            })
+            .await
+            .expect("item b");
+
+        let node_a = board_svc
+            .place_item_on_board(&board_a.id, item_a.item_id.as_str(), 0.0, 0.0)
+            .await
+            .expect("node a");
+        let node_b = board_svc
+            .place_item_on_board(&board_b.id, item_b.item_id.as_str(), 0.0, 0.0)
+            .await
+            .expect("node b");
+
+        let err = board_svc
+            .create_edge(&board_a.id, &node_a, &node_b, None)
+            .await
+            .expect_err("cross-board edge");
+        assert!(
+            err.to_string().contains("same board"),
+            "unexpected error: {err}"
+        );
+    }
 }

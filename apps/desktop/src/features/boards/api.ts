@@ -121,6 +121,10 @@ export async function trashBoard(boardId: string): Promise<void> {
   return invoke<void>("trash_board", { boardId });
 }
 
+export async function moveBoard(boardId: string, folderId?: string | null): Promise<void> {
+  return invoke<void>("move_board", { boardId, folderId: folderId ?? null });
+}
+
 export async function removeNode(boardId: string, nodeId: string): Promise<void> {
   return invoke<void>("remove_node", { boardId, nodeId });
 }

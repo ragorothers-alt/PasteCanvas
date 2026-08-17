@@ -59,7 +59,7 @@ pub fn spawn_job_runner(db: AppDatabase, app: tauri::AppHandle) -> Arc<AtomicBoo
                         );
                         match session_svc.handle_system_suspend().await {
                             Ok(paused) if paused > 0 => {
-                                let _ = app.emit("paste-canvas://session-suspended", paused);
+                                let _ = app.emit(crate::events::SESSION_SUSPENDED, paused);
                             }
                             Ok(_) => {}
                             Err(e) => {
@@ -125,6 +125,16 @@ pub async fn queue_link_metadata_job(
 async fn process_next_job(db: &AppDatabase) -> Result<bool, sqlx::Error> {
     let now = UnixMs::now().as_millis();
     let lease_until = now + 30_000; // 30 second lease
+
+    // Reclaim jobs whose worker died while holding a lease.
+    sqlx::query(
+        "UPDATE jobs SET state = 'queued', updated_at = ?
+         WHERE state = 'running' AND lease_until IS NOT NULL AND lease_until < ?",
+    )
+    .bind(now)
+    .bind(now)
+    .execute(db.pool())
+    .await?;
 
     // Claim next available job
     let job: Option<(String, String, String, i32)> = sqlx::query_as(

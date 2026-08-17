@@ -36,8 +36,11 @@ pub async fn register_browser_host(
     state: State<'_, AppState>,
     request: RegisterBrowserHostRequest,
 ) -> Result<(), String> {
-    if request.extension_origin.trim().is_empty() {
-        return Err("extension origin cannot be empty".to_string());
+    if !is_valid_extension_origin(&request.extension_origin) {
+        return Err(
+            "extension origin must be chrome-extension://<32-char-id>/ or moz-extension://<uuid>/"
+                .to_string(),
+        );
     }
 
     let nmh_path = nmh_exe_path()?;
@@ -67,7 +70,7 @@ pub async fn register_browser_host(
     // Register for Chrome and Edge via the registry (Windows)
     #[cfg(target_os = "windows")]
     {
-        use std::process::Command;
+        use crate::platform::windows::reg;
         let manifest_str = manifest_path.display().to_string();
         let browsers = [
             r"HKCU\Software\Google\Chrome\NativeMessagingHosts",
@@ -75,19 +78,13 @@ pub async fn register_browser_host(
         ];
         for base in browsers {
             let key = format!("{base}\\{NMH_NAME}");
-            let _ = Command::new("reg")
-                .args([
-                    "add",
-                    &key,
-                    "/ve",
-                    "/t",
-                    "REG_SZ",
-                    "/d",
-                    &manifest_str,
-                    "/f",
-                ])
-                .output();
+            reg::add_default(&key, &manifest_str)?;
         }
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        return Err("browser host registration is only supported on Windows".to_string());
     }
 
     tracing::info!(event = "browser_host_registered", nmh = %nmh_path.display());
@@ -99,16 +96,60 @@ pub async fn register_browser_host(
 pub async fn unregister_browser_host() -> Result<(), String> {
     #[cfg(target_os = "windows")]
     {
-        use std::process::Command;
+        use crate::platform::windows::reg;
         let browsers = [
             r"HKCU\Software\Google\Chrome\NativeMessagingHosts",
             r"HKCU\Software\Microsoft\Edge\NativeMessagingHosts",
         ];
         for base in browsers {
             let key = format!("{base}\\{NMH_NAME}");
-            let _ = Command::new("reg").args(["delete", &key, "/f"]).output();
+            reg::delete_key(&key)?;
         }
     }
     tracing::info!(event = "browser_host_unregistered");
     Ok(())
+}
+
+/// Chrome IDs are 32 chars in a–p. Firefox addon origins use a UUID.
+pub fn is_valid_extension_origin(origin: &str) -> bool {
+    let origin = origin.trim();
+    if let Some(rest) = origin.strip_prefix("chrome-extension://") {
+        let id = rest.trim_end_matches('/');
+        return id.len() == 32 && id.bytes().all(|b| matches!(b, b'a'..=b'p'));
+    }
+    if let Some(rest) = origin.strip_prefix("moz-extension://") {
+        let id = rest.trim_end_matches('/');
+        return uuid::Uuid::parse_str(id).is_ok();
+    }
+    false
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn accepts_chrome_extension_id() {
+        assert!(is_valid_extension_origin(
+            "chrome-extension://abcdefghijklmnopabcdefghijklmnop/"
+        ));
+    }
+
+    #[test]
+    fn rejects_empty_and_http_origins() {
+        assert!(!is_valid_extension_origin(""));
+        assert!(!is_valid_extension_origin("https://evil.example/"));
+        assert!(!is_valid_extension_origin("chrome-extension://"));
+        assert!(!is_valid_extension_origin("chrome-extension://SHORT/"));
+        assert!(!is_valid_extension_origin(
+            "chrome-extension://zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz/"
+        ));
+    }
+
+    #[test]
+    fn accepts_firefox_uuid_origin() {
+        assert!(is_valid_extension_origin(
+            "moz-extension://123e4567-e89b-12d3-a456-426614174000/"
+        ));
+    }
 }

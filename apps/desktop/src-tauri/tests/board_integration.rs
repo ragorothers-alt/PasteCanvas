@@ -224,4 +224,45 @@ mod tests {
         assert_eq!(snapshot.board.viewport_y, -50.0);
         assert!((snapshot.board.viewport_zoom - 2.5).abs() < 0.001);
     }
+
+    #[tokio::test]
+    async fn empty_trash_deletes_items_that_were_on_a_board() {
+        let (db, svc) = setup().await;
+        let board = svc.create_board("Trash FK", None).await.expect("create");
+
+        let item_id = EntityId::new();
+        let now = chrono::Utc::now().timestamp_millis();
+        sqlx::query(
+            "INSERT INTO items (id, item_type, title, inbox_status, is_favorite, is_pinned,
+              capture_method, created_at, updated_at, revision, origin_device_id, last_modified_device_id, sync_state)
+             VALUES (?, 'plain_text', 'Doomed', 'new', 0, 0, 'manual_create', ?, ?, 1, 'dev', 'dev', 'local_only')",
+        )
+        .bind(item_id.as_str())
+        .bind(now)
+        .bind(now)
+        .execute(db.pool())
+        .await
+        .expect("insert item");
+
+        svc.place_item_on_board(&board.id, item_id.as_str(), 10.0, 10.0)
+            .await
+            .expect("place");
+
+        sqlx::query("UPDATE items SET deleted_at = ? WHERE id = ?")
+            .bind(now)
+            .bind(item_id.as_str())
+            .execute(db.pool())
+            .await
+            .expect("soft delete");
+
+        let (deleted, _) = db.empty_trash().await.expect("empty trash");
+        assert_eq!(deleted, 1);
+
+        let leftover: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM items WHERE id = ?")
+            .bind(item_id.as_str())
+            .fetch_one(db.pool())
+            .await
+            .expect("count");
+        assert_eq!(leftover.0, 0);
+    }
 }

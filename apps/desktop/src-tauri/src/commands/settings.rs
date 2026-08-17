@@ -99,13 +99,7 @@ pub async fn update_hotkey(
         crate::platform::hotkey::validate_accelerator(&request.accelerator)?;
     }
 
-    let svc = SettingsService::new(state.db.clone());
-    svc.update_hotkey(&request.action, &request.accelerator)
-        .await
-        .map_err(|e| e.to_string())?;
-
-    // Re-register immediately so the change takes effect without a restart;
-    // an empty accelerator unbinds the action.
+    // Register first so a failed OS bind cannot persist a dead accelerator.
     if request.accelerator.trim().is_empty() {
         crate::platform::hotkey::unregister_action_hotkey(&app, &request.action);
     } else {
@@ -115,5 +109,10 @@ pub async fn update_hotkey(
             &request.accelerator,
         )?;
     }
+
+    let svc = SettingsService::new(state.db.clone());
+    svc.update_hotkey(&request.action, &request.accelerator)
+        .await
+        .map_err(|e| e.to_string())?;
     Ok(())
 }

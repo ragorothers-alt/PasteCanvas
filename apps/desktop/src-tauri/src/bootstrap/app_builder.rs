@@ -3,7 +3,6 @@ use tracing_subscriber::EnvFilter;
 
 use crate::bootstrap::app_state::AppState;
 use crate::commands;
-use crate::domain::value_objects::EntityId;
 use crate::infrastructure::database::migrator;
 use crate::infrastructure::database::pool::AppDatabase;
 use crate::jobs::job_runner;
@@ -26,10 +25,8 @@ pub fn build_and_run() {
             // CAP-009: an out-of-process integration (Explorer bridge / NMH)
             // committed a capture — refresh the Inbox without stealing focus.
             if crate::platform::notify::is_capture_notify(&args) {
-                let _ = app.emit("pastecanvas:item-captured", ());
-                if let Some(window) = app.get_webview_window("main") {
-                    let _ = window.show();
-                }
+                let _ = app.emit(crate::events::ITEM_CAPTURED, ());
+                let _ = crate::platform::window_manager::show_main_window(app);
                 return;
             }
             if let Some(window) = app.get_webview_window("main") {
@@ -64,7 +61,11 @@ pub fn build_and_run() {
                 db
             });
 
-            let device_id = EntityId::new();
+            let device_id = tauri::async_runtime::block_on(async {
+                db.load_or_create_current_device()
+                    .await
+                    .expect("persist device id")
+            });
 
             // Manage shared state
             app.manage(AppState {
@@ -252,6 +253,7 @@ pub fn build_and_run() {
             commands::boards::save_viewport,
             commands::boards::rename_board,
             commands::boards::trash_board,
+            commands::boards::move_board,
             commands::boards::remove_node,
             commands::boards::group_nodes,
             commands::boards::ungroup_nodes,

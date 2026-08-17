@@ -18,6 +18,7 @@ function makeItem(overrides: Partial<ItemSummary>): ItemSummary {
     captureSessionId: null,
     createdAt: Date.now(),
     revision: 1,
+    assetByteSize: null,
     ...overrides,
   };
 }

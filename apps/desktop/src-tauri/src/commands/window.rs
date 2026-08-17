@@ -36,40 +36,38 @@ pub async fn toggle_main_window(app: tauri::AppHandle) -> Result<(), String> {
 /// Sets autostart enabled/disabled via Windows registry.
 #[tauri::command]
 pub async fn set_autostart(state: State<'_, AppState>, enabled: bool) -> Result<(), String> {
-    let svc = crate::application::settings_service::SettingsService::new(state.db.clone());
-    let value = if enabled { "true" } else { "false" };
-    svc.set_setting("app.autostart", value)
-        .await
-        .map_err(|e| e.to_string())?;
-
-    // On Windows, manage autostart via registry
+    // Apply the OS hook first so a registry failure cannot leave the setting
+    // showing "enabled" while the machine will not actually auto-start.
     #[cfg(target_os = "windows")]
     {
-        use std::process::Command;
+        use crate::platform::windows::reg;
         let exe_path = std::env::current_exe().map_err(|e| e.to_string())?;
         let reg_path = r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run";
         let app_name = "PasteCanvas";
 
         if enabled {
-            let _ = Command::new("reg")
-                .args([
-                    "add",
-                    reg_path,
-                    "/v",
-                    app_name,
-                    "/t",
-                    "REG_SZ",
-                    "/d",
-                    &format!("\"{}\" --minimized", exe_path.display()),
-                    "/f",
-                ])
-                .output();
+            reg::add_value(
+                reg_path,
+                app_name,
+                &format!("\"{}\" --minimized", exe_path.display()),
+            )?;
         } else {
-            let _ = Command::new("reg")
-                .args(["delete", reg_path, "/v", app_name, "/f"])
-                .output();
+            reg::delete_value(reg_path, app_name)?;
         }
     }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        if enabled {
+            return Err("autostart is only supported on Windows".to_string());
+        }
+    }
+
+    let svc = crate::application::settings_service::SettingsService::new(state.db.clone());
+    let value = if enabled { "true" } else { "false" };
+    svc.set_setting("app.autostart", value)
+        .await
+        .map_err(|e| e.to_string())?;
 
     tracing::info!(event = "autostart_changed", enabled = enabled);
     Ok(())

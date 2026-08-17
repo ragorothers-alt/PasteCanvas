@@ -24,6 +24,7 @@ const mockItem: ItemSummary = {
   captureSessionId: null,
   createdAt: Date.now(),
   revision: 1,
+  assetByteSize: null,
 };
 
 describe("InboxItem", () => {

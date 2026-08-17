@@ -23,11 +23,18 @@ struct MigrationFile {
 
 /// All migrations embedded at compile time.
 /// Once released, a migration file MUST NOT be modified.
-const MIGRATIONS: &[MigrationFile] = &[MigrationFile {
-    version: 1,
-    name: "001_initial_schema",
-    sql: include_str!("../../../migrations/001_initial_schema.sql"),
-}];
+const MIGRATIONS: &[MigrationFile] = &[
+    MigrationFile {
+        version: 1,
+        name: "001_initial_schema",
+        sql: include_str!("../../../migrations/001_initial_schema.sql"),
+    },
+    MigrationFile {
+        version: 2,
+        name: "002_indexes",
+        sql: include_str!("../../../migrations/002_indexes.sql"),
+    },
+];
 
 /// Runs all pending migrations in order.
 ///
@@ -158,11 +165,11 @@ mod tests {
     async fn migrations_apply_successfully() {
         let pool = create_test_pool().await.expect("create pool");
         let applied = run_migrations(&pool).await.expect("run migrations");
-        assert_eq!(applied, vec![1]);
+        assert_eq!(applied, vec![1, 2]);
 
         // Verify schema version
         let version = current_schema_version(&pool).await.expect("version");
-        assert_eq!(version, Some(1));
+        assert_eq!(version, Some(2));
     }
 
     #[tokio::test]
@@ -170,7 +177,7 @@ mod tests {
         let pool = create_test_pool().await.expect("create pool");
 
         let first = run_migrations(&pool).await.expect("first run");
-        assert_eq!(first, vec![1]);
+        assert_eq!(first, vec![1, 2]);
 
         let second = run_migrations(&pool).await.expect("second run");
         assert!(second.is_empty()); // Nothing new to apply

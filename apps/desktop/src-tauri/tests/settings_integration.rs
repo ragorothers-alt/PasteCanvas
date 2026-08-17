@@ -55,6 +55,17 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn settings_set_rejects_invalid_json() {
+        let db = setup().await;
+        let svc = SettingsService::new(db.clone());
+        let err = svc
+            .set_setting("test.bad", "not-json")
+            .await
+            .expect_err("invalid json");
+        assert!(err.to_string().contains("JSON"));
+    }
+
+    #[tokio::test]
     async fn settings_get_nonexistent_returns_none() {
         let db = setup().await;
         let svc = SettingsService::new(db.clone());
@@ -93,6 +104,29 @@ mod tests {
         assert_eq!(exc.source, "user");
         assert!(exc.enabled);
         assert_eq!(exc.match_value, "MyApp.exe");
+    }
+
+    #[tokio::test]
+    async fn exclusions_add_conflict_returns_existing_id() {
+        let db = setup().await;
+        let svc = SettingsService::new(db.clone());
+
+        let first = svc
+            .add_exclusion("process_name", "Dup.exe")
+            .await
+            .expect("add");
+        svc.toggle_exclusion(&first.id).await.expect("disable");
+
+        let again = svc
+            .add_exclusion("process_name", "Dup.exe")
+            .await
+            .expect("re-add");
+        assert_eq!(again.id, first.id);
+        assert!(again.enabled);
+
+        svc.toggle_exclusion(&again.id)
+            .await
+            .expect("toggle by returned id");
     }
 
     #[tokio::test]
@@ -143,6 +177,7 @@ mod tests {
         svc.initialize_defaults().await.expect("init");
 
         assert!(svc.is_process_excluded("KeePass.exe").await.expect("check"));
+        assert!(svc.is_process_excluded("keepass.exe").await.expect("check"));
         assert!(
             svc.is_process_excluded("1Password.exe")
                 .await

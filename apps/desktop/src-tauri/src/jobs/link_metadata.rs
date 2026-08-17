@@ -86,6 +86,11 @@ pub async fn fetch_link_metadata(target_url: &str) -> Result<LinkMetadata, Metad
     let mut hops = 0usize;
     let response = loop {
         let response = client.get(current_url.clone()).send().await?;
+        if let Some(addr) = response.remote_addr() {
+            if is_private_ip(addr.ip()) {
+                return Err(MetadataError::PrivateAddress);
+            }
+        }
         let status = response.status();
         if status.is_redirection() {
             hops += 1;

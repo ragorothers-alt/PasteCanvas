@@ -31,6 +31,9 @@ import {
   placeItemOnBoard,
   bringNodeToFront,
   setNodeLocked,
+  removeNode,
+  groupNodes,
+  ungroupNodes,
 } from "./api";
 import { captureText } from "../inbox/api";
 import {
@@ -44,7 +47,7 @@ import { computeKeyboardMoves } from "../../adapters/canvas/canvasKeyboard";
 import { ItemCardNode } from "./ItemCardNode";
 import { BoardLinkNode } from "./BoardLinkNode";
 import { GroupNode } from "./GroupNode";
-import { useUndoStore, createMoveCommand } from "../../stores/undoStore";
+import { useUndoStore, createMoveCommand, createRemoveNodeCommand, createGroupCommand } from "../../stores/undoStore";
 
 const nodeTypes = {
   itemCard: ItemCardNode,
@@ -216,9 +219,11 @@ function SubBoardCreator({
 
   return (
     <Panel position="top-right">
-      <button className="btn-sub-board" onClick={() => void handleClick()} disabled={busy}>
-        {busy ? "建立中…" : "+ 子看板"}
-      </button>
+      <div className="canvas-toolbar">
+        <button className="btn-sub-board" onClick={() => void handleClick()} disabled={busy}>
+          {busy ? "建立中…" : "+ 子看板"}
+        </button>
+      </div>
     </Panel>
   );
 }
@@ -235,6 +240,7 @@ export function BoardView({ board, onEnterBoard }: BoardViewProps) {
   const nodesRef = useRef<CanvasNode[]>([]);
   nodesRef.current = nodes;
   const pendingMoves = useRef(new Map<string, { nodeId: string; x: number; y: number }>());
+  const keyboardOrigins = useRef(new Map<string, { x: number; y: number }>());
   const persistTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => {
     return () => {
@@ -308,6 +314,61 @@ export function BoardView({ board, onEnterBoard }: BoardViewProps) {
     [board.id, setNodes],
   );
 
+  const refreshCanvas = useCallback(() => {
+    setReloadKey((k) => k + 1);
+  }, []);
+
+  const handleUndo = useCallback(async () => {
+    await undo();
+    refreshCanvas();
+  }, [undo, refreshCanvas]);
+
+  const handleRedo = useCallback(async () => {
+    await redo();
+    refreshCanvas();
+  }, [redo, refreshCanvas]);
+
+  const handleRemoveSelected = useCallback(() => {
+    const selected = nodesRef.current.filter((n) => n.selected);
+    if (selected.length === 0) return;
+    const ids = new Set(selected.map((n) => n.id));
+    for (const n of selected) {
+      void removeNode(board.id, n.id);
+      const itemId = n.data.itemId;
+      if (itemId) {
+        push(createRemoveNodeCommand(board.id, n.id, itemId, n.position.x, n.position.y));
+      }
+    }
+    setNodes((ns) => ns.filter((n) => !ids.has(n.id)));
+    setEdges((es) => es.filter((edge) => !ids.has(edge.source) && !ids.has(edge.target)));
+  }, [board.id, push, setNodes, setEdges]);
+
+  const handleGroupSelected = useCallback(async () => {
+    const selected = nodesRef.current.filter((n) => n.selected && n.type !== "group");
+    if (selected.length < 2) return;
+    const nodeIds = selected.map((n) => n.id);
+    try {
+      const groupId = await groupNodes(board.id, nodeIds);
+      push(createGroupCommand(board.id, nodeIds, groupId));
+      refreshCanvas();
+    } catch {
+      /* ignore */
+    }
+  }, [board.id, push, refreshCanvas]);
+
+  const handleUngroupSelected = useCallback(async () => {
+    const groups = nodesRef.current.filter((n) => n.selected && n.type === "group");
+    if (groups.length === 0) return;
+    try {
+      for (const g of groups) {
+        await ungroupNodes(board.id, g.id);
+      }
+      refreshCanvas();
+    } catch {
+      /* ignore */
+    }
+  }, [board.id, refreshCanvas]);
+
   // Keyboard shortcuts: undo/redo + Workstream G node movement & lock
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
@@ -322,10 +383,26 @@ export function BoardView({ board, onEnterBoard }: BoardViewProps) {
       if ((e.ctrlKey || e.metaKey) && e.key === "z") {
         e.preventDefault();
         if (e.shiftKey) {
-          void redo();
+          void handleRedo();
         } else {
-          void undo();
+          void handleUndo();
         }
+        return;
+      }
+
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "g") {
+        e.preventDefault();
+        if (e.shiftKey) {
+          void handleUngroupSelected();
+        } else {
+          void handleGroupSelected();
+        }
+        return;
+      }
+
+      if (!e.ctrlKey && !e.metaKey && !e.altKey && (e.key === "Delete" || e.key === "Backspace")) {
+        e.preventDefault();
+        handleRemoveSelected();
         return;
       }
 
@@ -368,6 +445,10 @@ export function BoardView({ board, onEnterBoard }: BoardViewProps) {
         }),
       );
       for (const m of moves) {
+        if (!keyboardOrigins.current.has(m.nodeId)) {
+          const orig = originalPositions.current.get(m.nodeId);
+          keyboardOrigins.current.set(m.nodeId, orig ?? { x: m.x, y: m.y });
+        }
         pendingMoves.current.set(m.nodeId, m);
       }
       // Debounced batch persist — no DB write per keystroke frame
@@ -375,12 +456,33 @@ export function BoardView({ board, onEnterBoard }: BoardViewProps) {
       persistTimer.current = setTimeout(() => {
         const batch = [...pendingMoves.current.values()];
         pendingMoves.current.clear();
-        if (batch.length > 0) void moveNodes(board.id, batch);
+        const prev = [...keyboardOrigins.current.entries()].map(([nodeId, pos]) => ({
+          nodeId,
+          x: pos.x,
+          y: pos.y,
+        }));
+        keyboardOrigins.current.clear();
+        if (batch.length > 0) {
+          void moveNodes(board.id, batch);
+          push(createMoveCommand(board.id, batch, prev));
+          for (const m of batch) {
+            originalPositions.current.set(m.nodeId, { x: m.x, y: m.y });
+          }
+        }
       }, 400);
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [board.id, setNodes, undo, redo]);
+  }, [
+    board.id,
+    setNodes,
+    handleUndo,
+    handleRedo,
+    handleRemoveSelected,
+    handleGroupSelected,
+    handleUngroupSelected,
+    push,
+  ]);
 
   const handleNodesChange: OnNodesChange<CanvasNode> = useCallback(
     (changes) => {
@@ -486,6 +588,19 @@ export function BoardView({ board, onEnterBoard }: BoardViewProps) {
         <ViewportSaver boardId={board.id} />
         <FitViewHotkey />
         <SubBoardCreator boardId={board.id} onCreated={handleSubBoardCreated} />
+        <Panel position="top-left">
+          <div className="canvas-toolbar">
+            <button className="btn-sub-board" onClick={() => void handleGroupSelected()}>
+              群組
+            </button>
+            <button className="btn-sub-board" onClick={() => void handleUngroupSelected()}>
+              解散
+            </button>
+            <button className="btn-sub-board" onClick={handleRemoveSelected}>
+              移除
+            </button>
+          </div>
+        </Panel>
         <CanvasPasteHandler boardId={board.id} onPlaced={handleSubBoardCreated} />
         <InboxItemDropHandler boardId={board.id} onPlaced={handleSubBoardCreated} />
       </ReactFlow>

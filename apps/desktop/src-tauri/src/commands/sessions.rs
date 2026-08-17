@@ -1,6 +1,6 @@
 use serde::Deserialize;
 use std::sync::Arc;
-use tauri::{Emitter, State};
+use tauri::State;
 
 use crate::application::session_service::{SessionDto, SessionService};
 use crate::bootstrap::app_state::AppState;
@@ -50,9 +50,12 @@ pub async fn start_capture_session(
         .start_session(request.name.as_deref(), idle_ms)
         .await
         .map_err(|e| e.to_string())?;
-    // Activate clipboard listener + event-driven watcher for auto-capture
     state.clipboard_listener.start();
-    start_clipboard_watcher(&app, &state);
+    if let Err(e) = start_clipboard_watcher(&app, &state) {
+        state.clipboard_listener.stop();
+        let _ = svc.pause_session().await;
+        return Err(format!("clipboard watcher failed to start: {e}"));
+    }
     Ok(result)
 }
 
@@ -73,9 +76,12 @@ pub async fn resume_capture_session(
 ) -> Result<SessionDto, String> {
     let svc = SessionService::new(state.db.clone(), state.device_id.clone());
     let result = svc.resume_session().await.map_err(|e| e.to_string())?;
-    // Re-activate clipboard listener + watcher
     state.clipboard_listener.start();
-    start_clipboard_watcher(&app, &state);
+    if let Err(e) = start_clipboard_watcher(&app, &state) {
+        state.clipboard_listener.stop();
+        let _ = svc.pause_session().await;
+        return Err(format!("clipboard watcher failed to start: {e}"));
+    }
     Ok(result)
 }
 
@@ -92,7 +98,10 @@ pub async fn finish_capture_session(state: State<'_, AppState>) -> Result<Sessio
 /// CAP-003: spawns the event-driven clipboard watcher (WM_CLIPBOARDUPDATE).
 /// The callback applies the privacy gates BEFORE any content is persisted:
 /// sequence dedup → monitor-exclusion format → process exclusion list.
-fn start_clipboard_watcher(app: &tauri::AppHandle, state: &State<'_, AppState>) {
+fn start_clipboard_watcher(
+    app: &tauri::AppHandle,
+    state: &State<'_, AppState>,
+) -> Result<(), String> {
     let app_h = app.clone();
     let db = state.db.clone();
     let device = state.device_id.clone();
@@ -104,9 +113,6 @@ fn start_clipboard_watcher(app: &tauri::AppHandle, state: &State<'_, AppState>) 
         let device = device.clone();
         let listener_state = listener_state.clone();
         tauri::async_runtime::spawn(async move {
-            use tauri_plugin_clipboard_manager::ClipboardExt;
-
-            // 1. Sequence dedup / listening gate
             let seq = crate::platform::clipboard::listener::get_clipboard_sequence();
             if !listener_state.should_process(seq) {
                 return;
@@ -124,16 +130,26 @@ fn start_clipboard_watcher(app: &tauri::AppHandle, state: &State<'_, AppState>) 
 
             // 3. CAP-005/004: foreground process metadata + exclusion list
             let proc_name = crate::platform::clipboard::listener::get_foreground_process_name();
-            if let Some(ref p) = proc_name {
-                let settings =
-                    crate::application::settings_service::SettingsService::new(db.clone());
-                match settings.is_process_excluded(p).await {
-                    Ok(true) => {
-                        tracing::info!(event = "capture_skipped", reason = "excluded_process");
-                        return;
-                    }
-                    Ok(false) => {}
-                    Err(_) => { /* settings unavailable — capture proceeds */ }
+            let Some(ref p) = proc_name else {
+                // Fail-closed: unknown foreground app must not bypass exclusions.
+                tracing::warn!(
+                    event = "capture_skipped",
+                    reason = "unknown_foreground_process"
+                );
+                return;
+            };
+            let settings = crate::application::settings_service::SettingsService::new(db.clone());
+            match settings.is_process_excluded(p).await {
+                Ok(true) => {
+                    tracing::info!(event = "capture_skipped", reason = "excluded_process");
+                    return;
+                }
+                Ok(false) => {}
+                Err(e) => {
+                    // Fail-closed: if the exclusion list cannot be read,
+                    // do not capture (privacy gate must not fail open).
+                    tracing::warn!(event = "exclusion_check_failed", error = %e);
+                    return;
                 }
             }
 
@@ -145,44 +161,24 @@ fn start_clipboard_watcher(app: &tauri::AppHandle, state: &State<'_, AppState>) 
             };
 
             // 5. Read + capture (content only enters here, after all gates)
-            let text = match app_h.clipboard().read_text() {
-                Ok(t) => t,
-                Err(_) => return,
-            };
-            if text.trim().is_empty() {
+            let payload = crate::platform::clipboard::snapshot_clipboard(&app_h);
+            if matches!(payload, crate::platform::clipboard::ClipboardPayload::Empty) {
                 return;
             }
-
-            let capture_svc = crate::application::capture_service::CaptureService::new(db, device);
-            let req = crate::application::capture_service::CaptureTextRequest {
-                text,
-                capture_method: crate::domain::entities::item::CaptureMethod::CaptureSession,
-                source_app: proc_name,
-                window_title: None,
-            };
             let session_id = crate::domain::value_objects::EntityId::from_string(session.id);
-            match capture_svc
-                .capture_text_with_session(req, Some(session_id.clone()))
-                .await
-            {
-                Ok(result) => {
-                    let _ = app_h.emit("pastecanvas:item-captured", ());
-                    tracing::info!(
-                        event = "session_capture_success",
-                        item_id = %result.item_id,
-                        session_id = %session_id
-                    );
-                }
-                Err(e) => {
-                    tracing::warn!(event = "session_capture_failed", error = %e);
-                }
-            }
+            crate::platform::clipboard_persist::persist_and_emit(
+                &app_h,
+                payload,
+                crate::domain::entities::item::CaptureMethod::CaptureSession,
+                proc_name,
+                Some(session_id),
+                false,
+            )
+            .await;
         });
     });
 
-    if let Err(e) = crate::platform::clipboard_watch::start_clipboard_watch(callback) {
-        tracing::error!(event = "clipboard_watcher_start_failed", error = %e);
-    }
+    crate::platform::clipboard_watch::start_clipboard_watch(callback)
 }
 
 #[tauri::command]

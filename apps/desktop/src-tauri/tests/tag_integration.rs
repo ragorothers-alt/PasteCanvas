@@ -212,4 +212,47 @@ mod tests {
 
         assert_eq!(count.0, 0);
     }
+
+    #[tokio::test]
+    async fn delete_tag_clears_search_tags_text() {
+        let db = setup().await;
+        let item_id = create_test_item(&db).await;
+        let now = chrono::Utc::now().timestamp_millis();
+
+        sqlx::query(
+            "INSERT INTO tags (id, name, normalized_name, color, created_at, updated_at) VALUES (?, ?, ?, NULL, ?, ?)",
+        )
+        .bind("tag-search")
+        .bind("Searchable")
+        .bind("searchable")
+        .bind(now)
+        .bind(now)
+        .execute(db.pool())
+        .await
+        .expect("create tag");
+        sqlx::query("INSERT INTO item_tags (item_id, tag_id, created_at) VALUES (?, ?, ?)")
+            .bind(&item_id)
+            .bind("tag-search")
+            .bind(now)
+            .execute(db.pool())
+            .await
+            .expect("link");
+        sqlx::query("UPDATE search_documents SET tags_text = 'Searchable' WHERE item_id = ?")
+            .bind(&item_id)
+            .execute(db.pool())
+            .await
+            .expect("seed search");
+
+        pastecanvas_desktop_lib::commands::tags::delete_tag_in_pool(db.pool(), "tag-search")
+            .await
+            .expect("delete");
+
+        let (tags_text,): (String,) =
+            sqlx::query_as("SELECT tags_text FROM search_documents WHERE item_id = ?")
+                .bind(&item_id)
+                .fetch_one(db.pool())
+                .await
+                .expect("doc");
+        assert_eq!(tags_text, "");
+    }
 }

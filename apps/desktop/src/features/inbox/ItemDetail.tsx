@@ -1,12 +1,12 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
 import type { ItemSummary } from "./api";
-import { editItem, revealItemAsset } from "./api";
+import { editItem, getItemContent, revealItemAsset } from "./api";
 import { CodeEditor } from "../../adapters/code/CodeEditor";
 import { detectLanguage } from "../../adapters/code/CodeMirrorAdapter";
 import { TagSelector } from "../tags/TagSelector";
 import { PdfPreview } from "./PdfPreview";
 import { ImagePreview } from "./ImagePreview";
-import { ArrowSquareOut, FloppyDisk, X } from "@phosphor-icons/react";
+import { ArrowSquareOut, Copy, FloppyDisk, X } from "@phosphor-icons/react";
 
 // Item types that have a managed asset file on disk (INB-003 reveal)
 const ASSET_TYPES = new Set(["image", "screenshot", "pdf", "font", "svg", "file"]);
@@ -23,6 +23,37 @@ export function ItemDetail({ item, onClose, onUpdated }: ItemDetailProps) {
   const [title, setTitle] = useState(item.title ?? "");
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const [fullText, setFullText] = useState<string | null>(item.textPreview);
+  const [copyMsg, setCopyMsg] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    setFullText(item.textPreview);
+    void getItemContent(item.id)
+      .then((content) => {
+        if (cancelled) return;
+        if (content.plainText != null) setFullText(content.plainText);
+        if (content.title && !item.title) setTitle(content.title);
+      })
+      .catch(() => {
+        /* keep preview */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [item.id, item.textPreview, item.title]);
+
+  const handleCopy = useCallback(async () => {
+    const text = fullText ?? item.displayUrl ?? item.title ?? "";
+    if (!text) return;
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopyMsg("已複製");
+      setTimeout(() => setCopyMsg(null), 1500);
+    } catch {
+      setCopyMsg("複製失敗");
+    }
+  }, [fullText, item.displayUrl, item.title]);
 
   const handleReveal = useCallback(async () => {
     try {
@@ -74,6 +105,9 @@ export function ItemDetail({ item, onClose, onUpdated }: ItemDetailProps) {
             <ArrowSquareOut aria-hidden="true" /> 顯示檔案
           </button>
         )}
+        <button className="btn-reveal-asset" onClick={() => void handleCopy()} title="複製內容">
+          <Copy aria-hidden="true" /> {copyMsg ?? "複製"}
+        </button>
       </div>
 
       <div className="detail-title-section">
@@ -108,11 +142,11 @@ export function ItemDetail({ item, onClose, onUpdated }: ItemDetailProps) {
         )}
       </div>
 
-      {item.textPreview && item.itemType === "code" && (
+      {(fullText || item.textPreview) && item.itemType === "code" && (
         <div className="detail-content">
           <CodeEditor
-            code={item.textPreview}
-            language={detectLanguage(item.textPreview)}
+            code={fullText ?? item.textPreview ?? ""}
+            language={detectLanguage(fullText ?? item.textPreview ?? "")}
             editable={false}
           />
         </div>
@@ -132,9 +166,9 @@ export function ItemDetail({ item, onClose, onUpdated }: ItemDetailProps) {
         </div>
       )}
 
-      {item.textPreview && item.itemType !== "code" && item.itemType !== "pdf" && (
+      {(fullText || item.textPreview) && item.itemType !== "code" && item.itemType !== "pdf" && (
         <div className="detail-content">
-          <pre className="detail-text">{item.textPreview}</pre>
+          <pre className="detail-text">{fullText ?? item.textPreview}</pre>
         </div>
       )}
 

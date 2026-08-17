@@ -31,15 +31,9 @@ export function notifyCaptureSuccess(): void {
 }
 
 /** All window event names carrying capture outcomes (backend emitters). */
-export const CAPTURE_FAILURE_EVENTS = [
-  "capture://failed", // global hotkey path
-  "paste-canvas://capture-failed", // tray path
-] as const;
+export const CAPTURE_FAILURE_EVENTS = ["paste-canvas://capture-failed"] as const;
 
-export const CAPTURE_SUCCESS_EVENTS = [
-  "capture://success", // global hotkey path
-  "paste-canvas://capture-success", // tray path
-] as const;
+export const CAPTURE_SUCCESS_EVENTS = ["paste-canvas://capture-success"] as const;
 
 /**
  * Subscribes a capture-outcome listener set on window; returns the cleanup

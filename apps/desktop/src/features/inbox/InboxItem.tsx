@@ -116,13 +116,13 @@ export const InboxItem = memo(function InboxItem({
         ) : item.itemType === "pdf" ? (
           <PdfCard
             fileName={item.title ?? "document.pdf"}
-            fileSize={0}
+            fileSize={item.assetByteSize ?? 0}
             pageCount={null}
           />
         ) : item.itemType === "font" ? (
           <FontCard
             fileName={item.title ?? "font.ttf"}
-            fileSize={0}
+            fileSize={item.assetByteSize ?? 0}
           />
         ) : (
           <button type="button" className="item-title item-title-button" onClick={onOpen}>

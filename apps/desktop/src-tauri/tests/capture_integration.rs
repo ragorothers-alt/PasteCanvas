@@ -291,6 +291,60 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn capture_rich_html_stores_sanitized_html() {
+        let db = setup().await;
+        let svc = CaptureService::new(db.clone(), EntityId::new());
+        let dir = tempfile::TempDir::new().expect("dir");
+
+        let payload = pastecanvas_desktop_lib::platform::clipboard::ClipboardPayload::Html {
+            html: "<p onclick=\"x\">Hello <script>bad()</script><b>world</b></p>".into(),
+            plain: Some("Hello world".into()),
+        };
+        let results = svc
+            .capture_clipboard_payload(payload, dir.path(), CaptureMethod::ManualHotkey, None, None)
+            .await
+            .expect("html");
+        assert_eq!(results.len(), 1);
+
+        let row: (String, Option<String>, Option<String>) =
+            sqlx::query_as("SELECT item_type, plain_text, sanitized_html FROM items WHERE id = ?")
+                .bind(results[0].item_id.as_str())
+                .fetch_one(db.pool())
+                .await
+                .expect("row");
+        assert_eq!(row.0, "rich_text");
+        assert_eq!(row.1.as_deref(), Some("Hello world"));
+        let html = row.2.expect("sanitized");
+        assert!(html.contains("world"));
+        assert!(!html.contains("script"));
+        assert!(!html.contains("onclick"));
+    }
+
+    #[tokio::test]
+    async fn capture_clipboard_file_creates_asset() {
+        let db = setup().await;
+        let svc = CaptureService::new(db.clone(), EntityId::new());
+        let dir = tempfile::TempDir::new().expect("tmpdir");
+        let path = dir.path().join("clip.txt");
+        std::fs::write(&path, b"from clipboard files").expect("write");
+
+        let payload = pastecanvas_desktop_lib::platform::clipboard::ClipboardPayload::Files(vec![
+            path.to_string_lossy().to_string(),
+        ]);
+        let results = svc
+            .capture_clipboard_payload(payload, dir.path(), CaptureMethod::ManualHotkey, None, None)
+            .await
+            .expect("file");
+        assert_eq!(results.len(), 1);
+        let (item_type,): (String,) = sqlx::query_as("SELECT item_type FROM items WHERE id = ?")
+            .bind(results[0].item_id.as_str())
+            .fetch_one(db.pool())
+            .await
+            .expect("type");
+        assert_eq!(item_type, "file");
+    }
+
+    #[tokio::test]
     async fn idle_session_auto_ends_after_timeout() {
         let db = setup().await;
         let svc = SessionService::new(db.clone(), EntityId::new());
@@ -368,5 +422,47 @@ mod tests {
         // Still active
         let current = svc.get_current_session().await.expect("get");
         assert!(current.is_some());
+    }
+
+    #[tokio::test]
+    async fn capture_during_session_prevents_idle_auto_end() {
+        let db = setup().await;
+        let session_svc = SessionService::new(db.clone(), EntityId::new());
+        let capture_svc = CaptureService::new(db.clone(), EntityId::new());
+
+        let session = session_svc
+            .start_session(None, Some(60_000))
+            .await
+            .expect("start");
+
+        sqlx::query("UPDATE capture_sessions SET updated_at = started_at - 1_000_000 WHERE id = ?")
+            .bind(&session.id)
+            .execute(db.pool())
+            .await
+            .expect("age session");
+
+        capture_svc
+            .capture_text_with_session(
+                CaptureTextRequest {
+                    text: "still working".to_string(),
+                    capture_method: CaptureMethod::CaptureSession,
+                    source_app: None,
+                    window_title: None,
+                },
+                Some(EntityId::from_string(session.id.clone())),
+            )
+            .await
+            .expect("capture");
+
+        let now = chrono::Utc::now().timestamp_millis();
+        let ended = session_svc.auto_end_idle_sessions(now).await.expect("auto");
+        assert_eq!(ended, 0, "recent capture must keep the session alive");
+
+        let current = session_svc
+            .get_current_session()
+            .await
+            .expect("get")
+            .expect("still active");
+        assert_eq!(current.state, "active");
     }
 }

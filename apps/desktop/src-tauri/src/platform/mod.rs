@@ -4,6 +4,7 @@
 //! All Windows-only code lives here, behind port abstractions.
 
 pub mod clipboard;
+pub mod clipboard_persist;
 pub mod clipboard_watch;
 pub mod focus;
 pub mod hotkey;

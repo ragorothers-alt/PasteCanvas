@@ -47,28 +47,21 @@ describe("captureEvents (CAP-001 PRD feedback)", () => {
   it("subscribes to both hotkey and tray outcome events", () => {
     const stop = subscribeCaptureFeedback();
 
-    // Hotkey failure path
     window.dispatchEvent(
-      new CustomEvent("capture://failed", { detail: "Clipboard is empty" }),
+      new CustomEvent("paste-canvas://capture-failed", { detail: "Clipboard is empty" }),
     );
-    // Tray failure path
     window.dispatchEvent(
-      new CustomEvent("paste-canvas://capture-failed", { detail: "read error" }),
+      new CustomEvent("paste-canvas://capture-success", { detail: "item-1" }),
     );
-    // Hotkey success path
-    window.dispatchEvent(new CustomEvent("capture://success", { detail: "item-1" }));
-    // Tray success path
-    window.dispatchEvent(new CustomEvent("paste-canvas://capture-success", { detail: "item-2" }));
 
     const toasts = useToastStore.getState().toasts;
-    expect(toasts).toHaveLength(4);
-    expect(toasts.filter((t) => t.variant === "error")).toHaveLength(2);
-    expect(toasts.filter((t) => t.variant === "success")).toHaveLength(2);
+    expect(toasts).toHaveLength(2);
+    expect(toasts.filter((t) => t.variant === "error")).toHaveLength(1);
+    expect(toasts.filter((t) => t.variant === "success")).toHaveLength(1);
 
     stop();
 
-    // After cleanup, no further toasts appear
-    window.dispatchEvent(new CustomEvent("capture://failed", { detail: "late" }));
-    expect(useToastStore.getState().toasts).toHaveLength(4);
+    window.dispatchEvent(new CustomEvent("paste-canvas://capture-failed", { detail: "late" }));
+    expect(useToastStore.getState().toasts).toHaveLength(2);
   });
 });

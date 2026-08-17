@@ -20,6 +20,9 @@ pub enum BoardServiceError {
     #[error("edge source and target cannot be the same node")]
     SelfLoop,
 
+    #[error("edge endpoints must belong to the same board")]
+    CrossBoardEdge,
+
     #[error("folder not found: {0}")]
     FolderNotFound(String),
 
@@ -413,13 +416,23 @@ impl BoardService {
     ) -> Result<String, BoardServiceError> {
         let node_id = EntityId::new();
         let now = UnixMs::now();
+        let mut tx = self.db.pool().begin().await?;
+
+        let live: Option<(i64,)> =
+            sqlx::query_as("SELECT 1 FROM items WHERE id = ? AND deleted_at IS NULL")
+                .bind(item_id)
+                .fetch_optional(&mut *tx)
+                .await?;
+        if live.is_none() {
+            return Err(BoardServiceError::NotFound(item_id.to_string()));
+        }
 
         // Get next z_index
         let max_z: (i64,) = sqlx::query_as(
             "SELECT COALESCE(MAX(z_index), 0) FROM board_nodes WHERE board_id = ? AND deleted_at IS NULL",
         )
         .bind(board_id)
-        .fetch_one(self.db.pool())
+        .fetch_one(&mut *tx)
         .await?;
 
         sqlx::query(
@@ -437,7 +450,7 @@ impl BoardService {
         .bind(now.as_millis())
         .bind(self.device_id.as_str())
         .bind(self.device_id.as_str())
-        .execute(self.db.pool())
+        .execute(&mut *tx)
         .await?;
 
         // INB-003 (PRD): the FIRST placement onto any Board transitions a
@@ -449,7 +462,7 @@ impl BoardService {
         )
         .bind(now.as_millis())
         .bind(item_id)
-        .execute(self.db.pool())
+        .execute(&mut *tx)
         .await?;
 
         // Bump board revision
@@ -458,9 +471,10 @@ impl BoardService {
         )
         .bind(now.as_millis())
         .bind(board_id)
-        .execute(self.db.pool())
+        .execute(&mut *tx)
         .await?;
 
+        tx.commit().await?;
         Ok(node_id.to_string())
     }
 
@@ -476,7 +490,7 @@ impl BoardService {
         for (node_id, x, y) in moves {
             sqlx::query(
                 "UPDATE board_nodes SET x = ?, y = ?, updated_at = ?, revision = revision + 1
-                 WHERE id = ? AND board_id = ? AND deleted_at IS NULL",
+                 WHERE id = ? AND board_id = ? AND deleted_at IS NULL AND locked = 0",
             )
             .bind(x)
             .bind(y)
@@ -519,7 +533,7 @@ impl BoardService {
             let h = height.max(MIN_DIM);
             sqlx::query(
                 "UPDATE board_nodes SET width = ?, height = ?, updated_at = ?, revision = revision + 1
-                 WHERE id = ? AND board_id = ? AND deleted_at IS NULL",
+                 WHERE id = ? AND board_id = ? AND deleted_at IS NULL AND locked = 0",
             )
             .bind(w)
             .bind(h)
@@ -674,6 +688,31 @@ impl BoardService {
         .execute(self.db.pool())
         .await?;
 
+        if result.rows_affected() == 0 {
+            return Err(BoardServiceError::NotFound(board_id.to_string()));
+        }
+        Ok(())
+    }
+
+    /// Moves a live board into a folder, or to the root when `folder_id` is None.
+    pub async fn move_board(
+        &self,
+        board_id: &str,
+        folder_id: Option<&str>,
+    ) -> Result<(), BoardServiceError> {
+        if let Some(fid) = folder_id {
+            self.require_live_folder(fid).await?;
+        }
+        let now = UnixMs::now();
+        let result = sqlx::query(
+            "UPDATE boards SET folder_id = ?, updated_at = ?, revision = revision + 1
+             WHERE id = ? AND deleted_at IS NULL",
+        )
+        .bind(folder_id)
+        .bind(now.as_millis())
+        .bind(board_id)
+        .execute(self.db.pool())
+        .await?;
         if result.rows_affected() == 0 {
             return Err(BoardServiceError::NotFound(board_id.to_string()));
         }
@@ -1022,6 +1061,20 @@ impl BoardService {
 
         let edge_id = EntityId::new();
         let now = UnixMs::now();
+        let mut tx = self.db.pool().begin().await?;
+
+        let on_board: (i64,) = sqlx::query_as(
+            "SELECT COUNT(*) FROM board_nodes
+             WHERE board_id = ? AND deleted_at IS NULL AND id IN (?, ?)",
+        )
+        .bind(board_id)
+        .bind(source_node_id)
+        .bind(target_node_id)
+        .fetch_one(&mut *tx)
+        .await?;
+        if on_board.0 != 2 {
+            return Err(BoardServiceError::CrossBoardEdge);
+        }
 
         sqlx::query(
             "INSERT INTO board_edges (id, board_id, source_node_id, target_node_id, edge_type, label,
@@ -1037,9 +1090,10 @@ impl BoardService {
         .bind(now.as_millis())
         .bind(self.device_id.as_str())
         .bind(self.device_id.as_str())
-        .execute(self.db.pool())
+        .execute(&mut *tx)
         .await?;
 
+        tx.commit().await?;
         Ok(edge_id.to_string())
     }
 
@@ -1236,19 +1290,20 @@ impl BoardService {
 
         let node_id = EntityId::new();
         let now = UnixMs::now();
+        let mut tx = self.db.pool().begin().await?;
 
         let max_z: (i64,) = sqlx::query_as(
             "SELECT COALESCE(MAX(z_index), 0) FROM board_nodes WHERE board_id = ? AND deleted_at IS NULL",
         )
         .bind(board_id)
-        .fetch_one(self.db.pool())
+        .fetch_one(&mut *tx)
         .await?;
 
         // Get target board name for title_override
         let target_name: Option<(String,)> =
             sqlx::query_as("SELECT name FROM boards WHERE id = ? AND deleted_at IS NULL")
                 .bind(target_board_id)
-                .fetch_optional(self.db.pool())
+                .fetch_optional(&mut *tx)
                 .await?;
 
         let title = target_name.map(|(n,)| n);
@@ -1269,7 +1324,7 @@ impl BoardService {
         .bind(now.as_millis())
         .bind(self.device_id.as_str())
         .bind(self.device_id.as_str())
-        .execute(self.db.pool())
+        .execute(&mut *tx)
         .await?;
 
         sqlx::query(
@@ -1277,9 +1332,10 @@ impl BoardService {
         )
         .bind(now.as_millis())
         .bind(board_id)
-        .execute(self.db.pool())
+        .execute(&mut *tx)
         .await?;
 
+        tx.commit().await?;
         Ok(node_id.to_string())
     }
 }

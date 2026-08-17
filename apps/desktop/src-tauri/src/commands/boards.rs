@@ -251,6 +251,18 @@ pub async fn trash_board(state: State<'_, AppState>, board_id: String) -> Result
 }
 
 #[tauri::command]
+pub async fn move_board(
+    state: State<'_, AppState>,
+    board_id: String,
+    folder_id: Option<String>,
+) -> Result<(), String> {
+    let svc = BoardService::new(state.db.clone(), state.device_id.clone());
+    svc.move_board(&board_id, folder_id.as_deref())
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 pub async fn remove_node(
     state: State<'_, AppState>,
     board_id: String,

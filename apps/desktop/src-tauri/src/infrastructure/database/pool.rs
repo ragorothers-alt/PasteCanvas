@@ -28,7 +28,8 @@ impl AppDatabase {
             .foreign_keys(true)
             .busy_timeout(Duration::from_millis(5000))
             .pragma("cache_size", "-8000")
-            .pragma("temp_store", "MEMORY");
+            .pragma("temp_store", "MEMORY")
+            .pragma("journal_size_limit", "67108864");
 
         let pool = SqlitePoolOptions::new()
             .max_connections(4)
@@ -40,6 +41,39 @@ impl AppDatabase {
         Ok(Self {
             pool: Arc::new(pool),
         })
+    }
+
+    /// Loads the persisted current device id, or creates one on first launch.
+    pub async fn load_or_create_current_device(&self) -> Result<EntityId, sqlx::Error> {
+        if let Some((id,)) =
+            sqlx::query_as::<_, (String,)>("SELECT id FROM devices WHERE is_current = 1")
+                .fetch_optional(self.pool())
+                .await?
+        {
+            let now = UnixMs::now().as_millis();
+            sqlx::query("UPDATE devices SET last_seen_at = ?, updated_at = ? WHERE id = ?")
+                .bind(now)
+                .bind(now)
+                .bind(&id)
+                .execute(self.pool())
+                .await?;
+            return Ok(EntityId::from_string(id));
+        }
+
+        let id = EntityId::new();
+        let now = UnixMs::now().as_millis();
+        sqlx::query(
+            "INSERT INTO devices (id, display_name, platform, is_current, created_at, updated_at, last_seen_at)
+             VALUES (?, 'This device', ?, 1, ?, ?, ?)",
+        )
+        .bind(id.as_str())
+        .bind(std::env::consts::OS)
+        .bind(now)
+        .bind(now)
+        .bind(now)
+        .execute(self.pool())
+        .await?;
+        Ok(id)
     }
 
     /// Creates an in-memory database for testing.
@@ -131,7 +165,86 @@ impl AppDatabase {
         Ok(())
     }
 
-    /// Inserts an Item + search document + operation log in one transaction.
+    /// Inserts an item + content-addressed asset + search document in one
+    /// transaction. Shared by image / screenshot / explorer capture paths.
+    pub async fn insert_captured_asset_item(
+        &self,
+        item_id: &str,
+        item_type: &str,
+        title: &str,
+        capture_method: &str,
+        device_id: &str,
+        now_ms: i64,
+        sha256: &str,
+        media_kind: &str,
+        mime_type: &str,
+        byte_size: i64,
+        relative_path: &str,
+        source_app: &str,
+        filename: &str,
+    ) -> Result<(), sqlx::Error> {
+        let mut tx = self.pool.begin().await?;
+
+        sqlx::query(
+            "INSERT INTO items (id, item_type, title, content_hash, inbox_status, is_favorite, is_pinned,
+              capture_method, created_at, updated_at, revision, origin_device_id, last_modified_device_id, sync_state)
+             VALUES (?, ?, ?, ?, 'new', 0, 0, ?, ?, ?, 1, ?, ?, 'local_only')",
+        )
+        .bind(item_id)
+        .bind(item_type)
+        .bind(title)
+        .bind(sha256)
+        .bind(capture_method)
+        .bind(now_ms)
+        .bind(now_ms)
+        .bind(device_id)
+        .bind(device_id)
+        .execute(&mut *tx)
+        .await?;
+
+        let asset_id = EntityId::new();
+        sqlx::query(
+            "INSERT OR IGNORE INTO assets (id, sha256, media_kind, mime_type, byte_size, relative_path, created_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?)",
+        )
+        .bind(asset_id.as_str())
+        .bind(sha256)
+        .bind(media_kind)
+        .bind(mime_type)
+        .bind(byte_size)
+        .bind(relative_path)
+        .bind(now_ms)
+        .execute(&mut *tx)
+        .await?;
+
+        let actual_asset: (String,) = sqlx::query_as("SELECT id FROM assets WHERE sha256 = ?")
+            .bind(sha256)
+            .fetch_one(&mut *tx)
+            .await?;
+
+        sqlx::query(
+            "INSERT OR IGNORE INTO item_assets (item_id, asset_id, role, sort_order) VALUES (?, ?, 'primary', 0)",
+        )
+        .bind(item_id)
+        .bind(&actual_asset.0)
+        .execute(&mut *tx)
+        .await?;
+
+        sqlx::query(
+            "INSERT INTO search_documents (item_id, title, body, url, domain, source_app, tags_text, filename, updated_at)
+             VALUES (?, ?, '', '', '', ?, '', ?, ?)",
+        )
+        .bind(item_id)
+        .bind(title)
+        .bind(source_app)
+        .bind(filename)
+        .bind(now_ms)
+        .execute(&mut *tx)
+        .await?;
+
+        tx.commit().await?;
+        Ok(())
+    }
     /// Returns success ONLY after commit — durable write guarantee.
     pub async fn insert_item_with_search_doc(
         &self,
@@ -139,21 +252,23 @@ impl AppDatabase {
         source_context_id: Option<&EntityId>,
         source_app: Option<&str>,
         now: UnixMs,
+        sanitized_html: Option<&str>,
     ) -> Result<(), sqlx::Error> {
         let mut tx = self.pool.begin().await?;
 
         // Insert Item
         sqlx::query(
-            "INSERT INTO items (id, item_type, title, plain_text, normalized_url, display_url,
+            "INSERT INTO items (id, item_type, title, plain_text, sanitized_html, normalized_url, display_url,
               content_hash, inbox_status, is_favorite, is_pinned, capture_method,
               capture_session_id, source_context_id, created_at, updated_at, revision,
               origin_device_id, last_modified_device_id, sync_state)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'local_only')",
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'local_only')",
         )
         .bind(item.id.as_str())
         .bind(item.item_type.as_str())
         .bind(&item.title)
         .bind(&item.plain_text)
+        .bind(sanitized_html)
         .bind(&item.normalized_url)
         .bind(&item.display_url)
         .bind(&item.content_hash)
@@ -246,10 +361,13 @@ impl AppDatabase {
             "SELECT i.id, i.item_type, i.title, i.plain_text, i.display_url, i.inbox_status,
                     i.is_favorite, i.is_pinned, i.capture_method, i.created_at,
                     i.capture_session_id, i.revision, sd.domain,
-                    sc.application_name as source_app
+                    sc.application_name as source_app,
+                    a.byte_size as asset_byte_size
              FROM items i
              LEFT JOIN source_contexts sc ON sc.id = i.source_context_id
              LEFT JOIN search_documents sd ON sd.item_id = i.id
+             LEFT JOIN item_assets ia ON ia.item_id = i.id AND ia.role = 'primary'
+             LEFT JOIN assets a ON a.id = ia.asset_id
              WHERE i.deleted_at IS NULL AND i.inbox_status = ?
              ORDER BY i.is_pinned DESC, i.created_at DESC
              LIMIT ? OFFSET ?"
@@ -257,11 +375,14 @@ impl AppDatabase {
             "SELECT i.id, i.item_type, i.title, i.plain_text, i.display_url, i.inbox_status,
                     i.is_favorite, i.is_pinned, i.capture_method, i.created_at,
                     i.capture_session_id, i.revision, sd.domain,
-                    sc.application_name as source_app
+                    sc.application_name as source_app,
+                    a.byte_size as asset_byte_size
              FROM items i
              LEFT JOIN source_contexts sc ON sc.id = i.source_context_id
              LEFT JOIN search_documents sd ON sd.item_id = i.id
-             WHERE i.deleted_at IS NULL
+             LEFT JOIN item_assets ia ON ia.item_id = i.id AND ia.role = 'primary'
+             LEFT JOIN assets a ON a.id = ia.asset_id
+             WHERE i.deleted_at IS NULL AND i.inbox_status != 'archived'
              ORDER BY i.is_pinned DESC, i.created_at DESC
              LIMIT ? OFFSET ?"
         };
@@ -308,6 +429,7 @@ impl AppDatabase {
                     capture_session_id: row.get("capture_session_id"),
                     created_at: row.get("created_at"),
                     revision: row.get("revision"),
+                    asset_byte_size: row.try_get("asset_byte_size").ok().flatten(),
                 }
             })
             .collect();
@@ -376,11 +498,15 @@ impl AppDatabase {
     /// Trash impact stats: item count + total bytes of their primary assets.
     pub async fn get_trash_stats(&self) -> Result<(i64, i64), sqlx::Error> {
         let row: (i64, i64) = sqlx::query_as(
-            "SELECT COUNT(DISTINCT i.id), COALESCE(SUM(a.byte_size), 0)
-             FROM items i
-             LEFT JOIN item_assets ia ON ia.item_id = i.id
-             LEFT JOIN assets a ON a.id = ia.asset_id
-             WHERE i.deleted_at IS NOT NULL",
+            "SELECT COUNT(*), COALESCE((
+                 SELECT SUM(a.byte_size) FROM assets a
+                 WHERE a.id IN (
+                   SELECT ia.asset_id FROM item_assets ia
+                   JOIN items i2 ON i2.id = ia.item_id
+                   WHERE i2.deleted_at IS NOT NULL
+                 )
+               ), 0)
+             FROM items WHERE deleted_at IS NOT NULL",
         )
         .fetch_one(&*self.pool)
         .await?;
@@ -393,10 +519,13 @@ impl AppDatabase {
             "SELECT i.id, i.item_type, i.title, i.plain_text, i.display_url, i.inbox_status,
                     i.is_favorite, i.is_pinned, i.capture_method, i.created_at,
                     i.capture_session_id, i.revision, sd.domain,
-                    sc.application_name as source_app
+                    sc.application_name as source_app,
+                    a.byte_size as asset_byte_size
              FROM items i
              LEFT JOIN source_contexts sc ON sc.id = i.source_context_id
              LEFT JOIN search_documents sd ON sd.item_id = i.id
+             LEFT JOIN item_assets ia ON ia.item_id = i.id AND ia.role = 'primary'
+             LEFT JOIN assets a ON a.id = ia.asset_id
              WHERE i.deleted_at IS NOT NULL
              ORDER BY i.deleted_at DESC
              LIMIT ?",
@@ -427,6 +556,7 @@ impl AppDatabase {
                     capture_session_id: row.get("capture_session_id"),
                     created_at: row.get("created_at"),
                     revision: row.get("revision"),
+                    asset_byte_size: row.try_get("asset_byte_size").ok().flatten(),
                 }
             })
             .collect();
@@ -449,6 +579,14 @@ impl AppDatabase {
              WHERE i.deleted_at IS NOT NULL",
         )
         .fetch_all(&mut *tx)
+        .await?;
+
+        // board_nodes.item_id is ON DELETE RESTRICT, so placements of trashed
+        // items must be removed first (edges cascade from the node delete).
+        sqlx::query(
+            "DELETE FROM board_nodes WHERE item_id IN (SELECT id FROM items WHERE deleted_at IS NOT NULL)",
+        )
+        .execute(&mut *tx)
         .await?;
 
         // Hard-delete trashed items (cascades to item_assets + search_documents)
@@ -595,5 +733,23 @@ mod tests {
 
         let r2 = svc.capture_text(req).await.expect("second");
         assert!(r2.is_duplicate); // Advisory hint only
+    }
+
+    #[tokio::test]
+    async fn device_id_persists_across_lookups() {
+        let db = AppDatabase::open_in_memory().await.expect("open db");
+        crate::infrastructure::database::migrator::run_migrations(db.pool())
+            .await
+            .expect("migrations");
+
+        let first = db.load_or_create_current_device().await.expect("create");
+        let second = db.load_or_create_current_device().await.expect("reload");
+        assert_eq!(first.as_str(), second.as_str());
+
+        let count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM devices")
+            .fetch_one(db.pool())
+            .await
+            .expect("count");
+        assert_eq!(count.0, 1);
     }
 }

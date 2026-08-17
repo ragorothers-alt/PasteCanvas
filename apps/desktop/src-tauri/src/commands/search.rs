@@ -319,21 +319,28 @@ pub async fn search_items(
     // short searches remain usable (Phase-3 "1–2 character search" fixture).
     if dtos.is_empty() && !query.is_empty() && query.chars().count() < 3 {
         let like = short_query_like_pattern(query);
-        let rows: Vec<ResultRow> = sqlx::query_as(
+        let sql = format!(
             r"SELECT sd.item_id, COALESCE(sd.title,''), COALESCE(sd.body,''), COALESCE(sd.url,''),
                      COALESCE(sd.domain,''), COALESCE(sd.source_app,''),
                      i.item_type, i.is_favorite, i.created_at, 0.0 as rank
               FROM search_documents sd
               JOIN items i ON i.id = sd.item_id AND i.deleted_at IS NULL
-              WHERE (sd.title LIKE ? ESCAPE '\' OR sd.body LIKE ? ESCAPE '\')
-              ORDER BY i.created_at DESC LIMIT ?",
-        )
-        .bind(&like)
-        .bind(&like)
-        .bind(limit)
-        .fetch_all(state.db.pool())
-        .await
-        .map_err(|e| e.to_string())?;
+              WHERE (sd.title LIKE ? ESCAPE '\' OR sd.body LIKE ? ESCAPE '\'){filter_sql}
+              ORDER BY i.created_at DESC LIMIT ? OFFSET ?"
+        );
+        let mut q = sqlx::query_as::<_, ResultRow>(&sql).bind(&like).bind(&like);
+        for s in &strings {
+            q = q.bind(s);
+        }
+        for n in &numbers {
+            q = q.bind(n);
+        }
+        let rows: Vec<ResultRow> = q
+            .bind(limit)
+            .bind(request.offset)
+            .fetch_all(state.db.pool())
+            .await
+            .map_err(|e| e.to_string())?;
 
         dtos = rows
             .into_iter()

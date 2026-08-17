@@ -137,7 +137,7 @@ impl CaptureService {
             is_favorite: false,
             is_pinned: false,
             capture_method: req.capture_method,
-            capture_session_id,
+            capture_session_id: capture_session_id.clone(),
             source_context_id: source_context_id.clone(),
             created_at: now,
             updated_at: now,
@@ -157,8 +157,19 @@ impl CaptureService {
                 source_context_id.as_ref(),
                 req.source_app.as_deref(),
                 now,
+                None,
             )
             .await?;
+
+        if let Some(ref session_id) = capture_session_id {
+            sqlx::query(
+                "UPDATE capture_sessions SET updated_at = ? WHERE id = ? AND state = 'active'",
+            )
+            .bind(now.as_millis())
+            .bind(session_id.as_str())
+            .execute(self.db.pool())
+            .await?;
+        }
 
         tracing::info!(
             event = "item_captured",
@@ -225,63 +236,23 @@ impl CaptureService {
             .map(EntityId::from_string);
         let is_duplicate = duplicate_of.is_some();
 
-        let mut tx = self.db.pool().begin().await?;
-
-        sqlx::query(
-            "INSERT INTO items (id, item_type, title, content_hash, inbox_status, is_favorite, is_pinned,
-              capture_method, created_at, updated_at, revision, origin_device_id, last_modified_device_id, sync_state)
-             VALUES (?, 'image', 'Clipboard Image', ?, 'new', 0, 0, ?, ?, ?, 1, ?, ?, 'local_only')",
-        )
-        .bind(item_id.as_str())
-        .bind(&staged.sha256)
-        .bind(capture_method.as_str())
-        .bind(now.as_millis())
-        .bind(now.as_millis())
-        .bind(self.device_id.as_str())
-        .bind(self.device_id.as_str())
-        .execute(&mut *tx)
-        .await?;
-
-        // Insert asset (or reuse existing by hash)
-        let asset_id = EntityId::new();
-        sqlx::query(
-            "INSERT OR IGNORE INTO assets (id, sha256, media_kind, mime_type, byte_size, relative_path, created_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?)",
-        )
-        .bind(asset_id.as_str())
-        .bind(&staged.sha256)
-        .bind(staged.media_kind.as_str())
-        .bind(&staged.mime_type)
-        .bind(staged.byte_size as i64)
-        .bind(&staged.relative_path)
-        .bind(now.as_millis())
-        .execute(&mut *tx)
-        .await?;
-
-        let actual_asset: (String,) = sqlx::query_as("SELECT id FROM assets WHERE sha256 = ?")
-            .bind(&staged.sha256)
-            .fetch_one(&mut *tx)
+        self.db
+            .insert_captured_asset_item(
+                item_id.as_str(),
+                "image",
+                "Clipboard Image",
+                capture_method.as_str(),
+                self.device_id.as_str(),
+                now.as_millis(),
+                &staged.sha256,
+                staged.media_kind.as_str(),
+                &staged.mime_type,
+                staged.byte_size as i64,
+                &staged.relative_path,
+                source_app.as_deref().unwrap_or(""),
+                "clipboard_image.png",
+            )
             .await?;
-
-        sqlx::query(
-            "INSERT OR IGNORE INTO item_assets (item_id, asset_id, role, sort_order) VALUES (?, ?, 'primary', 0)",
-        )
-        .bind(item_id.as_str())
-        .bind(&actual_asset.0)
-        .execute(&mut *tx)
-        .await?;
-
-        sqlx::query(
-            "INSERT INTO search_documents (item_id, title, body, url, domain, source_app, tags_text, filename, updated_at)
-             VALUES (?, 'Clipboard Image', '', '', '', ?, '', 'clipboard_image.png', ?)",
-        )
-        .bind(item_id.as_str())
-        .bind(source_app.as_deref().unwrap_or(""))
-        .bind(now.as_millis())
-        .execute(&mut *tx)
-        .await?;
-
-        tx.commit().await?;
 
         tracing::info!(
             event = "image_captured",
@@ -296,6 +267,260 @@ impl CaptureService {
             is_duplicate,
             duplicate_of,
         })
+    }
+
+    /// Unified persist for a clipboard snapshot (hotkey / tray / session).
+    pub async fn capture_clipboard_payload(
+        &self,
+        payload: crate::platform::clipboard::ClipboardPayload,
+        data_dir: &std::path::Path,
+        capture_method: CaptureMethod,
+        source_app: Option<String>,
+        session_id: Option<EntityId>,
+    ) -> Result<Vec<CaptureResult>, CaptureError> {
+        use crate::platform::clipboard::ClipboardPayload;
+        match payload {
+            ClipboardPayload::Empty => Err(CaptureError::EmptyClipboard),
+            ClipboardPayload::Text(text) => {
+                let r = self
+                    .capture_text_with_session(
+                        CaptureTextRequest {
+                            text,
+                            capture_method,
+                            source_app,
+                            window_title: None,
+                        },
+                        session_id,
+                    )
+                    .await?;
+                Ok(vec![r])
+            }
+            ClipboardPayload::Html { html, plain } => {
+                let r = self
+                    .capture_rich_html(html, plain, capture_method, source_app, session_id)
+                    .await?;
+                Ok(vec![r])
+            }
+            ClipboardPayload::ImagePng(png) => {
+                let r = self
+                    .capture_png(data_dir, png, source_app, capture_method)
+                    .await?;
+                if let Some(ref sid) = session_id {
+                    self.attach_session(r.item_id.as_str(), sid).await?;
+                }
+                Ok(vec![r])
+            }
+            ClipboardPayload::Files(paths) => {
+                let mut out = Vec::new();
+                for path in paths {
+                    out.push(
+                        self.capture_file_path(
+                            data_dir,
+                            &path,
+                            capture_method,
+                            source_app.clone(),
+                            session_id.clone(),
+                        )
+                        .await?,
+                    );
+                }
+                if out.is_empty() {
+                    Err(CaptureError::EmptyClipboard)
+                } else {
+                    Ok(out)
+                }
+            }
+        }
+    }
+
+    async fn capture_rich_html(
+        &self,
+        html: String,
+        plain: Option<String>,
+        capture_method: CaptureMethod,
+        source_app: Option<String>,
+        session_id: Option<EntityId>,
+    ) -> Result<CaptureResult, CaptureError> {
+        let sanitized = crate::domain::html_sanitize::sanitize_html(&html);
+        if sanitized.trim().is_empty() {
+            if let Some(text) = plain {
+                return self
+                    .capture_text_with_session(
+                        CaptureTextRequest {
+                            text,
+                            capture_method,
+                            source_app,
+                            window_title: None,
+                        },
+                        session_id,
+                    )
+                    .await;
+            }
+            return Err(CaptureError::EmptyClipboard);
+        }
+        let plain_text = plain
+            .filter(|t| !t.trim().is_empty())
+            .unwrap_or_else(|| crate::domain::html_sanitize::html_to_plain_text(&sanitized));
+        if plain_text.len() > MAX_TEXT_SIZE || sanitized.len() > MAX_TEXT_SIZE {
+            return Err(CaptureError::ContentTooLarge {
+                size: plain_text.len().max(sanitized.len()),
+            });
+        }
+
+        let now = UnixMs::now();
+        let item_id = EntityId::new();
+        let content_hash = compute_text_hash(&sanitized);
+        let duplicate_of = self
+            .db
+            .find_item_by_content_hash(&content_hash)
+            .await?
+            .map(EntityId::from_string);
+        let is_duplicate = duplicate_of.is_some();
+        let title = derive_title(&plain_text, ItemType::RichText);
+
+        let item = Item {
+            id: item_id.clone(),
+            item_type: ItemType::RichText,
+            title,
+            plain_text: Some(plain_text),
+            normalized_url: None,
+            display_url: None,
+            content_hash: Some(content_hash),
+            inbox_status: InboxStatus::New,
+            is_favorite: false,
+            is_pinned: false,
+            capture_method,
+            capture_session_id: session_id.clone(),
+            source_context_id: None,
+            created_at: now,
+            updated_at: now,
+            revision: 1,
+            origin_device_id: self.device_id.clone(),
+            last_modified_device_id: self.device_id.clone(),
+            deleted_at: None,
+        };
+        item.validate()
+            .map_err(|e| CaptureError::Domain(e.to_string()))?;
+
+        self.db
+            .insert_item_with_search_doc(&item, None, source_app.as_deref(), now, Some(&sanitized))
+            .await?;
+
+        if let Some(ref sid) = session_id {
+            self.touch_session(sid).await?;
+        }
+
+        Ok(CaptureResult {
+            item_id,
+            committed_at: now,
+            is_duplicate,
+            duplicate_of,
+        })
+    }
+
+    async fn capture_file_path(
+        &self,
+        data_dir: &std::path::Path,
+        path: &str,
+        capture_method: CaptureMethod,
+        source_app: Option<String>,
+        session_id: Option<EntityId>,
+    ) -> Result<CaptureResult, CaptureError> {
+        let file_path = std::path::Path::new(path);
+        if !file_path.exists() {
+            return Err(CaptureError::Asset(format!("file not found: {path}")));
+        }
+        let meta = std::fs::metadata(file_path).map_err(|e| CaptureError::Asset(e.to_string()))?;
+        if meta.len() > 50 * 1024 * 1024 {
+            return Err(CaptureError::ContentTooLarge {
+                size: meta.len() as usize,
+            });
+        }
+        let filename = file_path
+            .file_name()
+            .map(|f| f.to_string_lossy().to_string())
+            .unwrap_or_else(|| "file".to_string());
+        let bytes = std::fs::read(file_path).map_err(|e| CaptureError::Asset(e.to_string()))?;
+        let store = crate::infrastructure::asset_store::AssetStore::new(data_dir.to_path_buf());
+        store
+            .initialize()
+            .map_err(|e| CaptureError::Asset(e.to_string()))?;
+        let staged = store
+            .stage_bytes(&bytes, Some(&filename))
+            .map_err(|e| CaptureError::Asset(e.to_string()))?;
+
+        let now = UnixMs::now();
+        let item_id = EntityId::new();
+        let item_type = match staged.media_kind {
+            crate::infrastructure::asset_store::MediaKind::Image => "image",
+            crate::infrastructure::asset_store::MediaKind::Pdf => "pdf",
+            crate::infrastructure::asset_store::MediaKind::Font => "font",
+            crate::infrastructure::asset_store::MediaKind::Svg => "svg",
+            crate::infrastructure::asset_store::MediaKind::Generic => "file",
+        };
+        let title = filename.rsplit(['/', '\\']).next().unwrap_or(&filename);
+        let title = match title.rfind('.') {
+            Some(idx) if idx > 0 => &title[..idx],
+            _ => title,
+        };
+
+        let duplicate_of = self
+            .db
+            .find_item_by_content_hash(&staged.sha256)
+            .await?
+            .map(EntityId::from_string);
+
+        self.db
+            .insert_captured_asset_item(
+                item_id.as_str(),
+                item_type,
+                title,
+                capture_method.as_str(),
+                self.device_id.as_str(),
+                now.as_millis(),
+                &staged.sha256,
+                staged.media_kind.as_str(),
+                &staged.mime_type,
+                staged.byte_size as i64,
+                &staged.relative_path,
+                source_app.as_deref().unwrap_or(""),
+                &filename,
+            )
+            .await?;
+
+        if let Some(ref sid) = session_id {
+            self.attach_session(item_id.as_str(), sid).await?;
+        }
+
+        Ok(CaptureResult {
+            item_id,
+            committed_at: now,
+            is_duplicate: duplicate_of.is_some(),
+            duplicate_of,
+        })
+    }
+
+    async fn attach_session(
+        &self,
+        item_id: &str,
+        session_id: &EntityId,
+    ) -> Result<(), CaptureError> {
+        sqlx::query("UPDATE items SET capture_session_id = ? WHERE id = ?")
+            .bind(session_id.as_str())
+            .bind(item_id)
+            .execute(self.db.pool())
+            .await?;
+        self.touch_session(session_id).await
+    }
+
+    async fn touch_session(&self, session_id: &EntityId) -> Result<(), CaptureError> {
+        let now = UnixMs::now();
+        sqlx::query("UPDATE capture_sessions SET updated_at = ? WHERE id = ? AND state = 'active'")
+            .bind(now.as_millis())
+            .bind(session_id.as_str())
+            .execute(self.db.pool())
+            .await?;
+        Ok(())
     }
 }
 
@@ -331,10 +556,12 @@ fn derive_title(text: &str, item_type: ItemType) -> Option<String> {
             let first_line = text.lines().next().unwrap_or("").trim();
             if first_line.is_empty() {
                 None
-            } else if first_line.len() > 100 {
-                Some(format!("{}…", &first_line[..100]))
             } else {
-                Some(first_line.to_string())
+                let mut title: String = first_line.chars().take(100).collect();
+                if first_line.chars().count() > 100 {
+                    title.push('…');
+                }
+                Some(title)
             }
         }
     }
@@ -405,6 +632,14 @@ mod tests {
         let title = derive_title(&long, ItemType::PlainText);
         let t = title.unwrap();
         assert!(t.chars().count() <= 101); // 100 chars + "…"
+    }
+
+    #[test]
+    fn derive_title_truncates_multibyte_without_panic() {
+        let long = "你好🎉".repeat(40);
+        let title = derive_title(&long, ItemType::PlainText).unwrap();
+        assert!(title.chars().count() <= 101);
+        assert!(title.ends_with('…'));
     }
 
     #[test]

@@ -141,6 +141,8 @@ impl SettingsService {
 
     /// Sets a setting value.
     pub async fn set_setting(&self, key: &str, value_json: &str) -> Result<(), SettingsError> {
+        serde_json::from_str::<serde_json::Value>(value_json)
+            .map_err(|e| SettingsError::InvalidValue(format!("value must be valid JSON: {e}")))?;
         let now = UnixMs::now().as_millis();
         sqlx::query(
             "INSERT INTO settings (key, value_json, schema_version, updated_at)
@@ -202,12 +204,22 @@ impl SettingsService {
         .execute(self.db.pool())
         .await?;
 
+        // ON CONFLICT updates the existing row but leaves its id unchanged —
+        // return the stored id so later toggle/remove calls hit the right row.
+        let row: (String, String) = sqlx::query_as(
+            "SELECT id, source FROM capture_exclusions WHERE match_type = ? AND match_value = ?",
+        )
+        .bind(match_type)
+        .bind(match_value)
+        .fetch_one(self.db.pool())
+        .await?;
+
         Ok(ExclusionDto {
-            id,
+            id: row.0,
             match_type: match_type.to_string(),
             match_value: match_value.to_string(),
             enabled: true,
-            source: "user".to_string(),
+            source: row.1,
         })
     }
 
@@ -243,7 +255,7 @@ impl SettingsService {
     /// Checks if a process name is excluded from capture.
     pub async fn is_process_excluded(&self, process_name: &str) -> Result<bool, SettingsError> {
         let row: Option<(i32,)> = sqlx::query_as(
-            "SELECT 1 FROM capture_exclusions WHERE match_type = 'process_name' AND match_value = ? AND enabled = 1",
+            "SELECT 1 FROM capture_exclusions WHERE match_type = 'process_name' AND lower(match_value) = lower(?) AND enabled = 1",
         )
         .bind(process_name)
         .fetch_optional(self.db.pool())

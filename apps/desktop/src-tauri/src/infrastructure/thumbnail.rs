@@ -5,6 +5,12 @@
 //! Thumbnails are bounded by construction: output never exceeds max_dim on
 //! either axis, and oversized inputs are refused by the caller.
 
+/// Hard cap on a single decoded axis (pixels). Headers advertising more are refused
+/// before the output buffer is allocated.
+const MAX_DECODE_DIM: u32 = 8192;
+/// Hard cap on decoded pixel count (~16 MP). Prevents decompression bombs.
+const MAX_DECODE_PIXELS: u64 = 16 * 1024 * 1024;
+
 /// Computes the downscale target size. Returns None when the image already
 /// fits within `max_dim` on both axes (caller should use the original).
 pub fn compute_target_size(width: u32, height: u32, max_dim: u32) -> Option<(u32, u32)> {
@@ -32,6 +38,13 @@ fn decode_png_rgba(bytes: &[u8]) -> Result<(Vec<u8>, u32, u32), String> {
         .map_err(|e| format!("png decode: {e}"))?;
     let info = reader.info();
     let (width, height) = (info.width, info.height);
+    if width == 0 || height == 0 || width > MAX_DECODE_DIM || height > MAX_DECODE_DIM {
+        return Err("png dimensions exceed limit".to_string());
+    }
+    let pixels = width as u64 * height as u64;
+    if pixels > MAX_DECODE_PIXELS {
+        return Err("png pixel count exceeds limit".to_string());
+    }
     let mut buf = vec![0u8; reader.output_buffer_size()];
     let frame = reader
         .next_frame(&mut buf)
@@ -161,5 +174,22 @@ mod tests {
     #[test]
     fn downscale_refuses_non_png() {
         assert!(downscale_png(b"not a png at all", 16).is_err());
+    }
+
+    #[test]
+    fn decode_refuses_decompression_bomb_header() {
+        // Valid PNG signature + IHDR claiming 100000x100000 without pixel data.
+        // Must fail on the dimension/pixel cap before allocating the buffer.
+        let mut bomb = Vec::from(*b"\x89PNG\r\n\x1a\n");
+        // IHDR chunk: length 13, type IHDR, 100000x100000, bit depth 8, RGBA
+        bomb.extend_from_slice(&13u32.to_be_bytes());
+        bomb.extend_from_slice(b"IHDR");
+        bomb.extend_from_slice(&100_000u32.to_be_bytes());
+        bomb.extend_from_slice(&100_000u32.to_be_bytes());
+        bomb.extend_from_slice(&[8, 6, 0, 0, 0]);
+        // CRC of IHDR payload — decoder may fail on CRC or on our cap; either is fine
+        bomb.extend_from_slice(&0u32.to_be_bytes());
+        assert!(decode_png_rgba(&bomb).is_err());
+        assert!(downscale_png(&bomb, 16).is_err());
     }
 }

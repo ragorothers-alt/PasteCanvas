@@ -14,6 +14,12 @@ import {
   unregisterExplorerIntegration,
   registerModernExplorerMenu,
   unregisterModernExplorerMenu,
+  createBackup,
+  createExport,
+  validateBackup,
+  prepareRestore,
+  getAutostart,
+  setAutostart,
 } from "./api";
 import type { Exclusion, HotkeyBinding } from "./api";
 import {
@@ -39,7 +45,7 @@ interface SettingsViewProps {
   onThemeChange?: (theme: ThemeMode) => void;
 }
 
-type SettingsCategory = "general" | "shortcuts" | "integrations" | "search" | "privacy";
+type SettingsCategory = "general" | "shortcuts" | "integrations" | "search" | "privacy" | "data";
 
 const SETTINGS_CATEGORIES: Array<{ id: SettingsCategory; label: string; hint: string }> = [
   { id: "general", label: "一般", hint: "外觀與視窗行為" },
@@ -47,6 +53,7 @@ const SETTINGS_CATEGORIES: Array<{ id: SettingsCategory; label: string; hint: st
   { id: "integrations", label: "整合", hint: "瀏覽器與檔案總管" },
   { id: "search", label: "搜尋", hint: "索引維護" },
   { id: "privacy", label: "隱私", hint: "擷取排除" },
+  { id: "data", label: "資料", hint: "備份與匯出" },
 ];
 
 export function SettingsView({ theme = "system", onThemeChange }: SettingsViewProps) {
@@ -63,19 +70,24 @@ export function SettingsView({ theme = "system", onThemeChange }: SettingsViewPr
   const [editingValue, setEditingValue] = useState("");
   const [hotkeyMsg, setHotkeyMsg] = useState<string | null>(null);
   const [closeToTray, setCloseToTray] = useState(true);
+  const [autostart, setAutostartState] = useState(false);
+  const [dataMsg, setDataMsg] = useState<string | null>(null);
+  const [restorePath, setRestorePath] = useState("");
   const [activeCategory, setActiveCategory] = useState<SettingsCategory>("general");
 
   const load = useCallback(async () => {
     try {
-      const [exc, hk, ctt] = await Promise.all([
+      const [exc, hk, ctt, auto] = await Promise.all([
         listExclusions(),
         listHotkeys(),
         getSetting("ui.close_to_tray").catch(() => null),
+        getAutostart().catch(() => false),
       ]);
       setExclusions(exc);
       setHotkeys(hk);
       // Stored as JSON ("true"/"false"); default true when unset.
       setCloseToTray(ctt === null ? true : ctt !== "false");
+      setAutostartState(Boolean(auto));
     } catch { /* ignore */ }
   }, []);
 
@@ -87,6 +99,60 @@ export function SettingsView({ theme = "system", onThemeChange }: SettingsViewPr
       await setSetting("ui.close_to_tray", next ? "true" : "false");
     } catch { /* ignore */ }
   }, [closeToTray]);
+
+  const handleToggleAutostart = useCallback(async () => {
+    const next = !autostart;
+    setAutostartState(next);
+    try {
+      await setAutostart(next);
+    } catch {
+      setAutostartState(!next);
+    }
+  }, [autostart]);
+
+  const handleCreateBackup = useCallback(async () => {
+    setDataMsg(null);
+    try {
+      const res = await createBackup();
+      setDataMsg(`已備份 ${res.itemCount} 個項目到 ${res.backupPath}`);
+    } catch (e) {
+      setDataMsg(`備份失敗：${String(e)}`);
+    }
+  }, []);
+
+  const handleCreateExport = useCallback(async () => {
+    setDataMsg(null);
+    try {
+      const res = await createExport();
+      setDataMsg(`已匯出 ${res.itemCount} 個項目到 ${res.exportPath}`);
+    } catch (e) {
+      setDataMsg(`匯出失敗：${String(e)}`);
+    }
+  }, []);
+
+  const handlePrepareRestore = useCallback(async () => {
+    const path = restorePath.trim();
+    if (!path) {
+      setDataMsg("請輸入備份資料夾路徑。");
+      return;
+    }
+    setDataMsg(null);
+    try {
+      const check = await validateBackup(path);
+      if (!check.valid) {
+        setDataMsg(`備份無效：${check.reason ?? "未知原因"}`);
+        return;
+      }
+      const staged = await prepareRestore(path);
+      if (!staged.valid) {
+        setDataMsg(`無法準備還原：${staged.reason ?? "未知原因"}`);
+        return;
+      }
+      setDataMsg(`已排程還原（${staged.itemCount} 個項目）。下次啟動時套用。`);
+    } catch (e) {
+      setDataMsg(`還原失敗：${String(e)}`);
+    }
+  }, [restorePath]);
 
   useEffect(() => { void load(); }, [load]);
 
@@ -178,9 +244,11 @@ export function SettingsView({ theme = "system", onThemeChange }: SettingsViewPr
     try {
       const res = await registerModernExplorerMenu();
       const script = res.sparseManifestPath
-        ? ` 已寫入 Windows 11 新版選單的稀疏套件指令碼。`
+        ? ` Windows 11 精簡選單不會自動出現，請用系統管理員執行：${res.sparseManifestPath}`
         : "";
-      setModernMsg(`IExplorerCommand 已註冊。${script}`);
+      setModernMsg(
+        `已接上「顯示更多選項」右鍵（ExplorerCommandHandler）。${script}`,
+      );
     } catch (e) {
       setModernMsg(`註冊失敗：${String(e)}`);
     }
@@ -288,6 +356,14 @@ export function SettingsView({ theme = "system", onThemeChange }: SettingsViewPr
             關閉按鈕會縮到系統匣（取消勾選則在關閉時結束程式）
           </span>
         </label>
+        <label className="settings-toggle-row">
+          <input
+            type="checkbox"
+            checked={autostart}
+            onChange={() => void handleToggleAutostart()}
+          />
+          <span>開機時啟動 PasteCanvas</span>
+        </label>
       </section>
       </>}
 
@@ -383,7 +459,7 @@ export function SettingsView({ theme = "system", onThemeChange }: SettingsViewPr
       <section className="settings-section">
         <h3>新版檔案總管選單（Windows 11）</h3>
         <p className="settings-hint">
-          為原生右鍵選單註冊 IExplorerCommand COM 伺服器，也會產生 Windows 11 新版選單所需的套件指令碼。
+          為「顯示更多選項」註冊 IExplorerCommand。Windows 11 精簡選單還需要另外執行寫出的稀疏套件指令碼，不會在按註冊時假裝已完成。
         </p>
         <div className="exclusion-add">
           <button className="btn-add-exclusion" onClick={() => void handleRegisterModern()}>
@@ -461,6 +537,32 @@ export function SettingsView({ theme = "system", onThemeChange }: SettingsViewPr
             </li>
           ))}
         </ul>
+      </section>}
+      {activeCategory === "data" && <section className="settings-section">
+        <h3>備份與匯出</h3>
+        <p className="settings-hint">
+          備份會保存資料庫與素材；匯出產生可讀的 JSON／Markdown。還原會在下次啟動時套用。
+        </p>
+        <div className="exclusion-add">
+          <button className="btn-add-exclusion" onClick={() => void handleCreateBackup()}>
+            立即備份
+          </button>
+          <button className="btn-add-exclusion" onClick={() => void handleCreateExport()}>
+            匯出
+          </button>
+        </div>
+        <div className="exclusion-add">
+          <input
+            className="exclusion-input"
+            placeholder="備份資料夾路徑"
+            value={restorePath}
+            onChange={(e) => setRestorePath(e.target.value)}
+          />
+          <button className="btn-add-exclusion" onClick={() => void handlePrepareRestore()}>
+            排程還原
+          </button>
+        </div>
+        {dataMsg && <p className="settings-hint">{dataMsg}</p>}
       </section>}
         </div>
       </div>

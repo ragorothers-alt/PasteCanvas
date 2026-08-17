@@ -7,5 +7,6 @@ pub mod color;
 pub mod entities;
 pub mod error;
 pub mod font;
+pub mod html_sanitize;
 pub mod svg_sanitize;
 pub mod value_objects;

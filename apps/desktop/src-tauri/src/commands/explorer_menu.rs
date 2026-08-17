@@ -16,6 +16,16 @@ use crate::bootstrap::app_state::AppState;
 const CLSID_INBOX: &str = "{7e4a0c1a-6f2c-4a31-9c7a-1a2b3c4d5e01}";
 const CLSID_BOARD: &str = "{7e4a0c1a-6f2c-4a31-9c7a-1a2b3c4d5e02}";
 const DLL_NAME: &str = "pastecanvas_explorer_dll.dll";
+const VERB_INBOX: &str = "PasteCanvasInbox";
+const VERB_BOARD: &str = "PasteCanvasBoard";
+
+/// Classic / "Show more options" verbs that bind an IExplorerCommand CLSID.
+fn explorer_command_verbs() -> [(&'static str, &'static str, &'static str); 2] {
+    [
+        (CLSID_INBOX, VERB_INBOX, "Send to PasteCanvas Inbox"),
+        (CLSID_BOARD, VERB_BOARD, "Send to PasteCanvas Board"),
+    ]
+}
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -35,21 +45,11 @@ fn dll_path() -> Result<std::path::PathBuf, String> {
 
 /// Writes a registry string value via the `reg` CLI (per-user HKCU).
 #[cfg(target_os = "windows")]
-fn reg_add(key: &str, value_name: Option<&str>, data: &str) {
-    use std::process::Command;
-    let mut cmd_args: Vec<String> = vec!["add".into(), key.into()];
-    if let Some(v) = value_name {
-        cmd_args.push("/v".into());
-        cmd_args.push(v.into());
-    } else {
-        cmd_args.push("/ve".into());
+fn reg_add(key: &str, value_name: Option<&str>, data: &str) -> Result<(), String> {
+    match value_name {
+        Some(name) => crate::platform::windows::reg::add_value(key, name, data),
+        None => crate::platform::windows::reg::add_default(key, data),
     }
-    cmd_args.push("/t".into());
-    cmd_args.push("REG_SZ".into());
-    cmd_args.push("/d".into());
-    cmd_args.push(data.into());
-    cmd_args.push("/f".into());
-    let _ = Command::new("reg").args(&cmd_args).output();
 }
 
 /// Registers the IExplorerCommand COM server + shell entries for files & folders.
@@ -68,20 +68,27 @@ pub async fn register_modern_explorer_menu(
         for clsid in [CLSID_INBOX, CLSID_BOARD] {
             let clsid_key = format!(r"HKCU\Software\Classes\CLSID\{clsid}");
             let inproc = format!(r"{clsid_key}\InprocServer32");
-            reg_add(&clsid_key, None, "PasteCanvas Explorer Command");
-            reg_add(&inproc, None, &dll_str);
-            reg_add(&inproc, Some("ThreadingModel"), "Apartment");
+            reg_add(&clsid_key, None, "PasteCanvas Explorer Command")?;
+            reg_add(&inproc, None, &dll_str)?;
+            reg_add(&inproc, Some("ThreadingModel"), "Apartment")?;
         }
-        // Shell entries for all files and directories
+        // IExplorerCommand is invoked only when ExplorerCommandHandler is set.
+        // A bare shell key with just a display name is a dead menu item.
         for root in [
             r"HKCU\Software\Classes\*",
             r"HKCU\Software\Classes\Directory",
         ] {
-            for clsid in [CLSID_INBOX, CLSID_BOARD] {
-                let shell_key = format!(r"{root}\shell\{clsid}");
-                reg_add(&shell_key, None, "Send to PasteCanvas");
+            for (clsid, verb, title) in explorer_command_verbs() {
+                let shell_key = format!(r"{root}\shell\{verb}");
+                reg_add(&shell_key, None, title)?;
+                reg_add(&shell_key, Some("ExplorerCommandHandler"), clsid)?;
             }
         }
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        return Err("modern explorer menu is only supported on Windows".to_string());
     }
 
     // Emit a sparse-package manifest + registration script for the Win11 modern menu
@@ -100,19 +107,21 @@ pub async fn register_modern_explorer_menu(
 pub async fn unregister_modern_explorer_menu() -> Result<(), String> {
     #[cfg(target_os = "windows")]
     {
-        use std::process::Command;
+        use crate::platform::windows::reg;
         let mut keys = Vec::new();
         for clsid in [CLSID_INBOX, CLSID_BOARD] {
             keys.push(format!(r"HKCU\Software\Classes\CLSID\{clsid}"));
-            for root in [
-                r"HKCU\Software\Classes\*",
-                r"HKCU\Software\Classes\Directory",
-            ] {
-                keys.push(format!(r"{root}\shell\{clsid}"));
+        }
+        for root in [
+            r"HKCU\Software\Classes\*",
+            r"HKCU\Software\Classes\Directory",
+        ] {
+            for (_, verb, _) in explorer_command_verbs() {
+                keys.push(format!(r"{root}\shell\{verb}"));
             }
         }
         for key in keys {
-            let _ = Command::new("reg").args(["delete", &key, "/f"]).output();
+            reg::delete_key(&key)?;
         }
     }
     tracing::info!(event = "explorer_menu_unregistered");
@@ -187,6 +196,19 @@ fn write_sparse_package_assets(
     let manifest_path = data_dir.join("explorer-menu-appxmanifest.xml");
     std::fs::write(&manifest_path, manifest).map_err(|e| format!("write manifest: {e}"))?;
 
+    // Appx identity requires Properties/Logo; write a 1x1 PNG so the script
+    // is not dead on arrival.
+    let assets = data_dir.join("Assets");
+    std::fs::create_dir_all(&assets).map_err(|e| format!("create Assets: {e}"))?;
+    const PNG_1X1: &[u8] = &[
+        0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44,
+        0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00, 0x00, 0x1F,
+        0x15, 0xC4, 0x89, 0x00, 0x00, 0x00, 0x0A, 0x49, 0x44, 0x41, 0x54, 0x78, 0x9C, 0x63, 0x00,
+        0x01, 0x00, 0x00, 0x05, 0x00, 0x01, 0x0D, 0x0A, 0x2D, 0xB4, 0x00, 0x00, 0x00, 0x00, 0x49,
+        0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82,
+    ];
+    std::fs::write(assets.join("logo.png"), PNG_1X1).map_err(|e| format!("write logo: {e}"))?;
+
     let script = format!(
         r#"# Registers the PasteCanvas sparse package so the IExplorerCommand entries
 # appear in the Windows 11 modern context menu. Run in an elevated PowerShell:
@@ -230,5 +252,19 @@ mod tests {
         let script = std::fs::read_to_string(&script_path).expect("read script");
         assert!(script.contains("Add-AppxPackage"));
         assert!(script.contains("explorer-menu-appxmanifest.xml"));
+
+        let logo = dir.path().join("Assets").join("logo.png");
+        assert!(logo.exists(), "sparse package logo must exist");
+    }
+
+    #[test]
+    fn explorer_command_verbs_bind_handler_clsids() {
+        let verbs = explorer_command_verbs();
+        assert_eq!(verbs[0].1, "PasteCanvasInbox");
+        assert_eq!(verbs[1].1, "PasteCanvasBoard");
+        assert_eq!(verbs[0].0, CLSID_INBOX);
+        assert_eq!(verbs[1].0, CLSID_BOARD);
+        assert!(verbs[0].2.contains("Inbox"));
+        assert!(verbs[1].2.contains("Board"));
     }
 }

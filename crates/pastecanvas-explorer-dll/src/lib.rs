@@ -78,16 +78,35 @@ fn collect_paths(items: &IShellItemArray) -> Vec<String> {
 }
 
 /// Resolves the pastecanvas-explorer bridge path (next to this DLL).
-fn bridge_exe_path() -> Option<std::path::PathBuf> {
-    let mut buf = [0u16; 1024];
-    let len =
-        unsafe { GetModuleFileNameW(std::ptr::null_mut(), buf.as_mut_ptr(), buf.len() as u32) };
-    if len == 0 {
-        return None;
+///
+/// Must use this DLL's module handle. `GetModuleFileNameW(NULL)` returns the
+/// host process (`explorer.exe` / `dllhost.exe`) and would look for the bridge
+/// next to Explorer itself.
+fn this_dll_dir() -> Option<std::path::PathBuf> {
+    const GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS: u32 = 0x0000_0004;
+    const GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT: u32 = 0x0000_0002;
+    unsafe {
+        let mut module = std::ptr::null_mut();
+        let ok = GetModuleHandleExW(
+            GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+            DllGetClassObject as *const u16,
+            &mut module,
+        );
+        if ok == 0 || module.is_null() {
+            return None;
+        }
+        let mut buf = [0u16; 1024];
+        let len = GetModuleFileNameW(module, buf.as_mut_ptr(), buf.len() as u32);
+        if len == 0 {
+            return None;
+        }
+        let dll_path = String::from_utf16_lossy(&buf[..len as usize]);
+        std::path::Path::new(&dll_path).parent().map(|p| p.to_path_buf())
     }
-    let dll_path = String::from_utf16_lossy(&buf[..len as usize]);
-    let dir = std::path::Path::new(&dll_path).parent()?.to_path_buf();
-    Some(dir.join("pastecanvas-explorer.exe"))
+}
+
+fn bridge_exe_path() -> Option<std::path::PathBuf> {
+    Some(this_dll_dir()?.join("pastecanvas-explorer.exe"))
 }
 
 impl IExplorerCommand_Impl for PasteCanvasCommand_Impl {
@@ -249,9 +268,10 @@ pub extern "system" fn DllCanUnloadNow() -> HRESULT {
     }
 }
 
-// GetModuleFileNameW via kernel32 (avoid pulling in an extra feature).
+// kernel32 — avoid pulling extra windows features just for module path lookup.
 unsafe extern "system" {
     fn GetModuleFileNameW(hmodule: *mut c_void, filename: *mut u16, nsize: u32) -> u32;
+    fn GetModuleHandleExW(flags: u32, name: *const u16, module: *mut *mut c_void) -> i32;
 }
 
 // Referenced to keep the unused-import lint quiet if a variant is not built.

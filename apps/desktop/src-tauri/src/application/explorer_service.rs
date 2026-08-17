@@ -24,6 +24,12 @@ pub enum ExplorerCaptureError {
 
     #[error("file not found: {0}")]
     NotFound(String),
+
+    #[error("board error: {0}")]
+    Board(String),
+
+    #[error("file too large: {0} bytes")]
+    TooLarge(u64),
 }
 
 /// Maps asset media kind to item type.
@@ -70,6 +76,12 @@ impl ExplorerCaptureService {
             return Err(ExplorerCaptureError::NotFound(path.to_string()));
         }
 
+        const MAX_CAPTURE_BYTES: u64 = 50 * 1024 * 1024;
+        let meta = std::fs::metadata(file_path)?;
+        if meta.len() > MAX_CAPTURE_BYTES {
+            return Err(ExplorerCaptureError::TooLarge(meta.len()));
+        }
+
         let filename = file_path
             .file_name()
             .map(|f| f.to_string_lossy().to_string())
@@ -114,65 +126,23 @@ impl ExplorerCaptureService {
         };
 
         // Transaction: item + asset + link + search document
-        let mut tx = self.db.pool().begin().await?;
-
-        sqlx::query(
-            "INSERT INTO items (id, item_type, title, content_hash, inbox_status, is_favorite, is_pinned,
-              capture_method, created_at, updated_at, revision, origin_device_id, last_modified_device_id, sync_state)
-             VALUES (?, ?, ?, ?, 'new', 0, 0, 'explorer', ?, ?, 1, ?, ?, 'local_only')",
-        )
-        .bind(item.id.as_str())
-        .bind(item.item_type.as_str())
-        .bind(&title)
-        .bind(&staged.sha256)
-        .bind(now.as_millis())
-        .bind(now.as_millis())
-        .bind(self.device_id.as_str())
-        .bind(self.device_id.as_str())
-        .execute(&mut *tx)
-        .await?;
-
-        let asset_id = EntityId::new();
-        sqlx::query(
-            "INSERT OR IGNORE INTO assets (id, sha256, media_kind, mime_type, byte_size, relative_path, created_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?)",
-        )
-        .bind(asset_id.as_str())
-        .bind(&staged.sha256)
-        .bind(staged.media_kind.as_str())
-        .bind(&staged.mime_type)
-        .bind(staged.byte_size as i64)
-        .bind(&staged.relative_path)
-        .bind(now.as_millis())
-        .execute(&mut *tx)
-        .await?;
-
-        let actual_asset: (String,) = sqlx::query_as("SELECT id FROM assets WHERE sha256 = ?")
-            .bind(&staged.sha256)
-            .fetch_one(&mut *tx)
+        self.db
+            .insert_captured_asset_item(
+                item.id.as_str(),
+                item.item_type.as_str(),
+                &title,
+                "explorer",
+                self.device_id.as_str(),
+                now.as_millis(),
+                &staged.sha256,
+                staged.media_kind.as_str(),
+                &staged.mime_type,
+                staged.byte_size as i64,
+                &staged.relative_path,
+                "explorer",
+                &filename,
+            )
             .await?;
-
-        sqlx::query(
-            "INSERT OR IGNORE INTO item_assets (item_id, asset_id, role, sort_order) VALUES (?, ?, 'primary', 0)",
-        )
-        .bind(item.id.as_str())
-        .bind(&actual_asset.0)
-        .execute(&mut *tx)
-        .await?;
-
-        // Search document — filename is searchable (SRC-001: PDF 檔名與 metadata)
-        sqlx::query(
-            "INSERT INTO search_documents (item_id, title, body, url, domain, source_app, tags_text, filename, updated_at)
-             VALUES (?, ?, '', '', '', 'explorer', '', ?, ?)",
-        )
-        .bind(item.id.as_str())
-        .bind(&title)
-        .bind(&filename)
-        .bind(now.as_millis())
-        .execute(&mut *tx)
-        .await?;
-
-        tx.commit().await?;
 
         tracing::info!(
             event = "explorer_file_captured",
@@ -201,48 +171,14 @@ impl ExplorerCaptureService {
         item_id: &EntityId,
         index: usize,
     ) -> Result<(), ExplorerCaptureError> {
-        let now = UnixMs::now();
-        let node_id = EntityId::new();
-        // Cascade placement so multiple files don't overlap
         let offset = (index as f64) * 40.0;
-        let (x, y) = (100.0 + offset, 100.0 + offset);
-
-        let max_z: (i64,) = sqlx::query_as(
-            "SELECT COALESCE(MAX(z_index), 0) FROM board_nodes WHERE board_id = ? AND deleted_at IS NULL",
-        )
-        .bind(board_id)
-        .fetch_one(self.db.pool())
-        .await?;
-
-        sqlx::query(
-            "INSERT INTO board_nodes (id, board_id, node_kind, item_id, x, y, width, height, z_index,
-              locked, collapsed, created_at, updated_at, revision, origin_device_id, last_modified_device_id, sync_state)
-             VALUES (?, ?, 'item', ?, ?, ?, 280, 180, ?, 0, 0, ?, ?, 1, ?, ?, 'local_only')",
-        )
-        .bind(node_id.as_str())
-        .bind(board_id)
-        .bind(item_id.as_str())
-        .bind(x)
-        .bind(y)
-        .bind(max_z.0 + 1)
-        .bind(now.as_millis())
-        .bind(now.as_millis())
-        .bind(self.device_id.as_str())
-        .bind(self.device_id.as_str())
-        .execute(self.db.pool())
-        .await?;
-
-        // INB-003 (PRD): first placement transitions 'new' → 'triaged'; the
-        // guard preserves any status the user changed afterwards.
-        sqlx::query(
-            "UPDATE items SET inbox_status = 'triaged', updated_at = ?, revision = revision + 1
-             WHERE id = ? AND inbox_status = 'new' AND deleted_at IS NULL",
-        )
-        .bind(now.as_millis())
-        .bind(item_id.as_str())
-        .execute(self.db.pool())
-        .await?;
-
+        let svc = crate::application::board_service::BoardService::new(
+            self.db.clone(),
+            self.device_id.clone(),
+        );
+        svc.place_item_on_board(board_id, item_id.as_str(), 100.0 + offset, 100.0 + offset)
+            .await
+            .map_err(|e| ExplorerCaptureError::Board(e.to_string()))?;
         Ok(())
     }
 }

@@ -27,7 +27,7 @@ describe("startTauriEventBridge (WIN-005 / CAP-009)", () => {
     const names = mockListen.mock.calls.map((c) => c[0]);
     expect(names).toContain("paste-canvas://show-settings");
     expect(names).toContain("paste-canvas://focus-search");
-    expect(names).toContain("pastecanvas:item-captured");
+    expect(names).toContain("paste-canvas://item-captured");
     stop();
   });
 
@@ -35,7 +35,7 @@ describe("startTauriEventBridge (WIN-005 / CAP-009)", () => {
     type Handler = (e: { payload: unknown }) => void;
     let captureHandler: Handler | null = null;
     mockListen.mockImplementation((name: string, handler: Handler) => {
-      if (name === "pastecanvas:item-captured") captureHandler = handler;
+      if (name === "paste-canvas://item-captured") captureHandler = handler;
       return Promise.resolve(() => {});
     });
 
@@ -44,14 +44,14 @@ describe("startTauriEventBridge (WIN-005 / CAP-009)", () => {
 
     const received = new Promise<string>((resolve) => {
       window.addEventListener(
-        "pastecanvas:item-captured",
+        "paste-canvas://item-captured",
         (e) => resolve(e.type),
         { once: true },
       );
     });
     expect(captureHandler).not.toBeNull();
     captureHandler!({ payload: null });
-    expect(await received).toBe("pastecanvas:item-captured");
+    expect(await received).toBe("paste-canvas://item-captured");
     stop();
   });
 

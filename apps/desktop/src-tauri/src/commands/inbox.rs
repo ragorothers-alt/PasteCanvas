@@ -164,43 +164,67 @@ pub async fn batch_archive(
     state: State<'_, AppState>,
     item_ids: Vec<String>,
 ) -> Result<u64, String> {
+    batch_archive_in_pool(state.db.pool(), &item_ids).await
+}
+
+pub async fn batch_archive_in_pool(
+    pool: &sqlx::SqlitePool,
+    item_ids: &[String],
+) -> Result<u64, String> {
+    if item_ids.is_empty() {
+        return Ok(0);
+    }
     let now = chrono::Utc::now().timestamp_millis();
+    let mut tx = pool.begin().await.map_err(|e| e.to_string())?;
     let mut affected = 0u64;
 
-    for id in &item_ids {
+    for id in item_ids {
         let result = sqlx::query(
             "UPDATE items SET inbox_status = 'archived', updated_at = ?, revision = revision + 1 WHERE id = ? AND deleted_at IS NULL",
         )
         .bind(now)
         .bind(id)
-        .execute(state.db.pool())
+        .execute(&mut *tx)
         .await
         .map_err(|e| e.to_string())?;
         affected += result.rows_affected();
     }
 
+    tx.commit().await.map_err(|e| e.to_string())?;
     Ok(affected)
 }
 
 /// Batch delete (soft) multiple items.
 #[tauri::command]
 pub async fn batch_trash(state: State<'_, AppState>, item_ids: Vec<String>) -> Result<u64, String> {
+    batch_trash_in_pool(state.db.pool(), &item_ids).await
+}
+
+pub async fn batch_trash_in_pool(
+    pool: &sqlx::SqlitePool,
+    item_ids: &[String],
+) -> Result<u64, String> {
+    if item_ids.is_empty() {
+        return Ok(0);
+    }
     let now = chrono::Utc::now().timestamp_millis();
+    let mut tx = pool.begin().await.map_err(|e| e.to_string())?;
     let mut affected = 0u64;
 
-    for id in &item_ids {
+    for id in item_ids {
         let result = sqlx::query(
             "UPDATE items SET deleted_at = ?, updated_at = ?, revision = revision + 1 WHERE id = ? AND deleted_at IS NULL",
         )
         .bind(now)
         .bind(now)
         .bind(id)
-        .execute(state.db.pool())
+        .execute(&mut *tx)
         .await
         .map_err(|e| e.to_string())?;
         affected += result.rows_affected();
     }
 
+    tx.commit().await.map_err(|e| e.to_string())?;
     Ok(affected)
 }
 
@@ -312,17 +336,16 @@ pub async fn edit_item(
     }
     query = query.bind(&request.item_id).bind(request.expected_revision);
 
-    let result = query
-        .execute(state.db.pool())
-        .await
-        .map_err(|e| e.to_string())?;
+    let mut tx = state.db.pool().begin().await.map_err(|e| e.to_string())?;
+
+    let result = query.execute(&mut *tx).await.map_err(|e| e.to_string())?;
 
     if result.rows_affected() == 0 {
         // Check if item exists to distinguish NOT_FOUND from REVISION_CONFLICT
         let exists: Option<(i64,)> =
             sqlx::query_as("SELECT revision FROM items WHERE id = ? AND deleted_at IS NULL")
                 .bind(&request.item_id)
-                .fetch_optional(state.db.pool())
+                .fetch_optional(&mut *tx)
                 .await
                 .map_err(|e| e.to_string())?;
 
@@ -335,13 +358,24 @@ pub async fn edit_item(
         };
     }
 
+    if let Some(ref title) = request.title {
+        sqlx::query("UPDATE search_documents SET title = ?, updated_at = ? WHERE item_id = ?")
+            .bind(title)
+            .bind(now)
+            .bind(&request.item_id)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| e.to_string())?;
+    }
+
     // Return new revision
     let new_rev: (i64,) = sqlx::query_as("SELECT revision FROM items WHERE id = ?")
         .bind(&request.item_id)
-        .fetch_one(state.db.pool())
+        .fetch_one(&mut *tx)
         .await
         .map_err(|e| e.to_string())?;
 
+    tx.commit().await.map_err(|e| e.to_string())?;
     Ok(new_rev.0)
 }
 
@@ -354,6 +388,10 @@ pub struct ItemContentDto {
     pub plain_text: Option<String>,
     pub display_url: Option<String>,
     pub title: Option<String>,
+    pub revision: i64,
+    pub inbox_status: String,
+    pub capture_method: String,
+    pub created_at: i64,
 }
 
 /// Returns full item content (plain_text + URL) for copy/open actions.
@@ -368,10 +406,15 @@ pub async fn get_item_content(
         plain_text: Option<String>,
         display_url: Option<String>,
         title: Option<String>,
+        revision: i64,
+        inbox_status: String,
+        capture_method: String,
+        created_at: i64,
     }
 
     let row: Option<ContentRow> = sqlx::query_as(
-        "SELECT item_type, plain_text, display_url, title FROM items WHERE id = ? AND deleted_at IS NULL",
+        "SELECT item_type, plain_text, display_url, title, revision, inbox_status, capture_method, created_at
+         FROM items WHERE id = ? AND deleted_at IS NULL",
     )
     .bind(&item_id)
     .fetch_optional(state.db.pool())
@@ -385,6 +428,10 @@ pub async fn get_item_content(
             plain_text: r.plain_text,
             display_url: r.display_url,
             title: r.title,
+            revision: r.revision,
+            inbox_status: r.inbox_status,
+            capture_method: r.capture_method,
+            created_at: r.created_at,
         }),
         None => Err("NOT_FOUND: item does not exist".to_string()),
     }
@@ -481,10 +528,11 @@ pub async fn get_item_thumbnail(
         sha256: String,
         relative_path: String,
         byte_size: i64,
+        mime_type: String,
     }
 
     let row: Option<AssetRow> = sqlx::query_as(
-        "SELECT a.sha256, a.relative_path, a.byte_size
+        "SELECT a.sha256, a.relative_path, a.byte_size, a.mime_type
          FROM item_assets ia
          JOIN assets a ON a.id = ia.asset_id
          WHERE ia.item_id = ? AND ia.role = 'primary'
@@ -533,7 +581,7 @@ pub async fn get_item_thumbnail(
             if asset.byte_size <= MAX_THUMB_FALLBACK_BYTES {
                 use base64::Engine;
                 return Ok(AssetDataDto {
-                    mime_type: "image/png".to_string(),
+                    mime_type: asset.mime_type,
                     data_base64: base64::engine::general_purpose::STANDARD.encode(&bytes),
                     byte_size: asset.byte_size,
                 });

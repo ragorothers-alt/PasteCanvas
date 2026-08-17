@@ -24,6 +24,12 @@ pub enum BackupError {
 
     #[error("backup directory not found")]
     DirNotFound,
+
+    #[error("backup database not found")]
+    BackupDbMissing,
+
+    #[error("backup checksum mismatch")]
+    ChecksumMismatch,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -56,6 +62,8 @@ pub struct BackupManifest {
     pub item_count: i64,
     #[serde(default)]
     pub asset_count: i64,
+    #[serde(default)]
+    pub db_sha256: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -88,10 +96,12 @@ impl BackupService {
             .join(format!("backup_{}", timestamp));
         std::fs::create_dir_all(&backup_dir)?;
 
-        // Use VACUUM INTO for a consistent backup (safe with WAL)
+        // Use VACUUM INTO for a consistent backup (safe with WAL).
+        // Quote the path so apostrophes in the user profile cannot break the SQL.
         let db_backup_path = backup_dir.join("pastecanvas.sqlite3");
-        let vacuum_sql = format!("VACUUM INTO '{}'", db_backup_path.display());
+        let vacuum_sql = vacuum_into_sql(&db_backup_path);
         sqlx::query(&vacuum_sql).execute(self.db.pool()).await?;
+        let db_sha256 = sha256_file(&db_backup_path)?;
 
         // Copy assets
         let assets_src = self.data_dir.join("assets");
@@ -115,6 +125,7 @@ impl BackupService {
             "itemCount": item_count.0,
             "assetCount": asset_count,
             "schemaVersion": 1,
+            "dbSha256": db_sha256,
         });
         std::fs::write(
             backup_dir.join("manifest.json"),
@@ -127,6 +138,8 @@ impl BackupService {
             item_count = item_count.0,
             asset_count = asset_count,
         );
+
+        prune_old_backups(&self.data_dir.join("backups"), 10);
 
         Ok(BackupResultDto {
             backup_path: backup_dir.display().to_string(),
@@ -256,20 +269,49 @@ impl BackupService {
         };
 
         // Only restore backups with a compatible schema version
-        let valid = manifest.schema_version == 1;
+        if manifest.schema_version != 1 {
+            return RestoreValidationDto {
+                valid: false,
+                schema_version: manifest.schema_version,
+                item_count: manifest.item_count,
+                asset_count: manifest.asset_count,
+                reason: Some(format!(
+                    "incompatible schema version {}",
+                    manifest.schema_version
+                )),
+            };
+        }
+
+        if let Some(ref expected) = manifest.db_sha256 {
+            match sha256_file(&db_path) {
+                Ok(actual) if actual.eq_ignore_ascii_case(expected) => {}
+                Ok(_) => {
+                    return RestoreValidationDto {
+                        valid: false,
+                        schema_version: manifest.schema_version,
+                        item_count: manifest.item_count,
+                        asset_count: manifest.asset_count,
+                        reason: Some("backup checksum mismatch".into()),
+                    };
+                }
+                Err(e) => {
+                    return RestoreValidationDto {
+                        valid: false,
+                        schema_version: manifest.schema_version,
+                        item_count: manifest.item_count,
+                        asset_count: manifest.asset_count,
+                        reason: Some(format!("checksum failed: {e}")),
+                    };
+                }
+            }
+        }
+
         RestoreValidationDto {
-            valid,
+            valid: true,
             schema_version: manifest.schema_version,
             item_count: manifest.item_count,
             asset_count: manifest.asset_count,
-            reason: if valid {
-                None
-            } else {
-                Some(format!(
-                    "incompatible schema version {}",
-                    manifest.schema_version
-                ))
-            },
+            reason: None,
         }
     }
 
@@ -308,12 +350,27 @@ impl BackupService {
 
         let backup_db = backup_path.join("pastecanvas.sqlite3");
         let main_db = data_dir.join("pastecanvas.sqlite3");
-        if backup_db.exists() {
-            std::fs::copy(&backup_db, &main_db)?;
-            // Remove stale WAL/SHM so the restored DB opens cleanly
-            let _ = std::fs::remove_file(data_dir.join("pastecanvas.sqlite3-wal"));
-            let _ = std::fs::remove_file(data_dir.join("pastecanvas.sqlite3-shm"));
+        if !backup_db.exists() {
+            return Err(BackupError::BackupDbMissing);
         }
+
+        let manifest_path = backup_path.join("manifest.json");
+        if let Ok(raw) = std::fs::read_to_string(&manifest_path) {
+            if let Ok(manifest) = serde_json::from_str::<BackupManifest>(&raw) {
+                if let Some(ref expected) = manifest.db_sha256 {
+                    let actual = sha256_file(&backup_db)?;
+                    if !actual.eq_ignore_ascii_case(expected) {
+                        return Err(BackupError::ChecksumMismatch);
+                    }
+                }
+            }
+        }
+
+        // Copy to a sibling temp file, then swap into place so a crash cannot
+        // leave a half-written main database.
+        replace_file_atomically(&backup_db, &main_db)?;
+        let _ = std::fs::remove_file(data_dir.join("pastecanvas.sqlite3-wal"));
+        let _ = std::fs::remove_file(data_dir.join("pastecanvas.sqlite3-shm"));
 
         // Merge backup assets (content-addressed → safe to copy over)
         let backup_assets = backup_path.join("assets");
@@ -354,4 +411,89 @@ fn sanitize_filename(name: &str) -> String {
         .chars()
         .take(50)
         .collect()
+}
+
+/// Builds a VACUUM INTO statement with a SQL-escaped path.
+pub(crate) fn vacuum_into_sql(path: &Path) -> String {
+    let escaped = path.to_string_lossy().replace('\'', "''");
+    format!("VACUUM INTO '{escaped}'")
+}
+
+fn sha256_file(path: &Path) -> Result<String, std::io::Error> {
+    use sha2::{Digest, Sha256};
+    use std::io::Read;
+    let mut file = std::fs::File::open(path)?;
+    let mut hasher = Sha256::new();
+    let mut buf = [0u8; 64 * 1024];
+    loop {
+        let n = file.read(&mut buf)?;
+        if n == 0 {
+            break;
+        }
+        hasher.update(&buf[..n]);
+    }
+    Ok(format!("{:x}", hasher.finalize()))
+}
+
+/// Writes `src` over `dest` via a sibling temp + rename so a crash cannot leave
+/// a truncated destination. On Windows, the live file is moved aside first.
+fn replace_file_atomically(src: &Path, dest: &Path) -> Result<(), std::io::Error> {
+    let tmp = dest.with_extension("sqlite3.restore-tmp");
+    let bak = dest.with_extension("sqlite3.pre-restore");
+    if tmp.exists() {
+        let _ = std::fs::remove_file(&tmp);
+    }
+    std::fs::copy(src, &tmp)?;
+    if dest.exists() {
+        if bak.exists() {
+            let _ = std::fs::remove_file(&bak);
+        }
+        std::fs::rename(dest, &bak)?;
+    }
+    match std::fs::rename(&tmp, dest) {
+        Ok(()) => {
+            let _ = std::fs::remove_file(&bak);
+            Ok(())
+        }
+        Err(e) => {
+            if bak.exists() && !dest.exists() {
+                let _ = std::fs::rename(&bak, dest);
+            }
+            let _ = std::fs::remove_file(&tmp);
+            Err(e)
+        }
+    }
+}
+
+fn prune_old_backups(backups_root: &Path, keep: usize) {
+    let Ok(entries) = std::fs::read_dir(backups_root) else {
+        return;
+    };
+    let mut dirs: Vec<_> = entries
+        .filter_map(|e| e.ok())
+        .filter(|e| e.path().is_dir())
+        .collect();
+    dirs.sort_by_key(|e| e.file_name());
+    if dirs.len() <= keep {
+        return;
+    }
+    let drop_count = dirs.len() - keep;
+    for old in dirs.into_iter().take(drop_count) {
+        let _ = std::fs::remove_dir_all(old.path());
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn vacuum_into_escapes_single_quotes() {
+        let path = Path::new(r"C:\Users\O'Brien\data\pastecanvas.sqlite3");
+        let sql = vacuum_into_sql(path);
+        assert!(sql.contains("O''Brien"));
+        assert!(!sql.contains("O'Brien"));
+        assert!(sql.starts_with("VACUUM INTO '"));
+        assert!(sql.ends_with("'"));
+    }
 }

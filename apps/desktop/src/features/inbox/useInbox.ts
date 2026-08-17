@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
-import { queryInbox, toggleFavorite, togglePin, trashItem } from "./api";
+import { archiveItem, queryInbox, toggleFavorite, togglePin, trashItem } from "./api";
 import type { ItemSummary } from "./api";
 import { isTauri } from "../../lib/runtime";
 import { showCaptureError } from "../../stores/toastStore";
@@ -82,11 +82,14 @@ export function groupItems(items: ItemSummary[], mode: GroupMode): ItemGroup[] {
   }
 }
 
+const PAGE_SIZE = 50;
+
 export function useInbox() {
   const [items, setItems] = useState<ItemSummary[]>([]);
   const [state, setState] = useState<LoadState>("loading");
   const [error, setError] = useState<string | null>(null);
   const [groupMode, setGroupMode] = useState<GroupMode>("date");
+  const [hasMore, setHasMore] = useState(false);
 
   const load = useCallback(async () => {
     setState("loading");
@@ -95,12 +98,14 @@ export function useInbox() {
     // show a clean empty state instead of an error.
     if (!isTauri()) {
       setItems([]);
+      setHasMore(false);
       setState("success");
       return;
     }
     try {
-      const result = await queryInbox({ limit: 100, offset: 0 });
+      const result = await queryInbox({ limit: PAGE_SIZE, offset: 0 });
       setItems(result);
+      setHasMore(result.length === PAGE_SIZE);
       setState("success");
     } catch (err) {
       setError(String(err));
@@ -108,12 +113,23 @@ export function useInbox() {
     }
   }, []);
 
+  const loadMore = useCallback(async () => {
+    if (!isTauri()) return;
+    try {
+      const result = await queryInbox({ limit: PAGE_SIZE, offset: items.length });
+      setItems((prev) => [...prev, ...result]);
+      setHasMore(result.length === PAGE_SIZE);
+    } catch (err) {
+      showCaptureError(`載入更多失敗：${String(err)}`);
+    }
+  }, [items.length]);
+
   useEffect(() => {
     void load();
     // Listen for capture events to auto-refresh
     const handler = () => void load();
-    window.addEventListener("pastecanvas:item-captured", handler);
-    return () => window.removeEventListener("pastecanvas:item-captured", handler);
+    window.addEventListener("paste-canvas://item-captured", handler);
+    return () => window.removeEventListener("paste-canvas://item-captured", handler);
   }, [load]);
 
   const handleToggleFavorite = useCallback(async (itemId: string) => {
@@ -151,6 +167,20 @@ export function useInbox() {
     }
   }, []);
 
+  const handleArchive = useCallback(async (itemId: string) => {
+    try {
+      await archiveItem(itemId);
+      setItems((prev) => prev.filter((item) => item.id !== itemId));
+    } catch (err) {
+      showCaptureError(`無法封存項目：${String(err)}`);
+    }
+  }, []);
+
+  const removeLocal = useCallback((itemIds: string[]) => {
+    const gone = new Set(itemIds);
+    setItems((prev) => prev.filter((item) => !gone.has(item.id)));
+  }, []);
+
   const groups = groupItems(items, groupMode);
 
   return {
@@ -160,9 +190,13 @@ export function useInbox() {
     setGroupMode,
     state,
     error,
+    hasMore,
     reload: load,
+    loadMore,
     toggleFavorite: handleToggleFavorite,
     togglePin: handleTogglePin,
     trash: handleTrash,
+    archive: handleArchive,
+    removeLocal,
   };
 }

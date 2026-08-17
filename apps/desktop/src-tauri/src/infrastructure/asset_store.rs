@@ -96,6 +96,21 @@ impl AssetStore {
             });
         }
 
+        // SVG is untrusted markup — sanitize before hashing/storing so the
+        // content-addressed object is the cleaned payload, not the original.
+        let (kind_hint, _, _) = detect_media(data, original_filename);
+        let sanitized_svg = if kind_hint == MediaKind::Svg {
+            let text = std::str::from_utf8(data).map_err(|_| AssetStoreError::UnsupportedType)?;
+            let sanitized = crate::domain::svg_sanitize::sanitize_svg(text)
+                .filter(|s| crate::domain::svg_sanitize::is_svg_safe(s))
+                .ok_or(AssetStoreError::UnsupportedType)?;
+            Some(sanitized.into_bytes())
+        } else {
+            None
+        };
+        let data = sanitized_svg.as_deref().unwrap_or(data);
+        let size = data.len() as u64;
+
         // Compute SHA-256
         let mut hasher = Sha256::new();
         hasher.update(data);
@@ -419,6 +434,26 @@ mod tests {
         store.initialize().expect("init");
         let staged = store.stage_bytes(b"sec roundtrip", None).expect("stage");
         assert!(store.resolve_path_checked(&staged.relative_path).is_ok());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn stage_svg_strips_script_before_store() {
+        let dir = std::env::temp_dir().join(format!("pastecanvas-svg-{}", uuid::Uuid::now_v7()));
+        let store = AssetStore::new(dir.clone());
+        store.initialize().expect("init");
+
+        let dirty = br#"<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script><rect width="10" height="10"/></svg>"#;
+        let staged = store
+            .stage_bytes(dirty, Some("icon.svg"))
+            .expect("stage svg");
+        assert_eq!(staged.media_kind, MediaKind::Svg);
+        let stored = std::fs::read(store.resolve_path(&staged.relative_path)).expect("read");
+        let text = String::from_utf8(stored).expect("utf8");
+        assert!(!text.contains("script"));
+        assert!(!text.contains("alert"));
+        assert!(text.contains("rect"));
+
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

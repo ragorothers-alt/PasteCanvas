@@ -86,3 +86,49 @@ export async function registerModernExplorerMenu(): Promise<ExplorerMenuRegistra
 export async function unregisterModernExplorerMenu(): Promise<void> {
   return invoke<void>("unregister_modern_explorer_menu");
 }
+
+export interface BackupResult {
+  backupPath: string;
+  itemCount: number;
+  assetCount: number;
+  createdAt: number;
+}
+
+export interface ExportResult {
+  exportPath: string;
+  itemCount: number;
+  boardCount: number;
+  createdAt: number;
+}
+
+export interface RestoreValidation {
+  valid: boolean;
+  schemaVersion: number;
+  itemCount: number;
+  assetCount: number;
+  reason: string | null;
+}
+
+export async function createBackup(): Promise<BackupResult> {
+  return invoke<BackupResult>("create_backup");
+}
+
+export async function createExport(): Promise<ExportResult> {
+  return invoke<ExportResult>("create_export");
+}
+
+export async function validateBackup(backupPath: string): Promise<RestoreValidation> {
+  return invoke<RestoreValidation>("validate_backup", { backupPath });
+}
+
+export async function prepareRestore(backupPath: string): Promise<RestoreValidation> {
+  return invoke<RestoreValidation>("prepare_restore", { backupPath });
+}
+
+export async function getAutostart(): Promise<boolean> {
+  return invoke<boolean>("get_autostart");
+}
+
+export async function setAutostart(enabled: boolean): Promise<void> {
+  return invoke<void>("set_autostart", { enabled });
+}

@@ -94,4 +94,50 @@ mod tests {
         let applied = BackupService::apply_pending_restore(dir.path()).expect("apply");
         assert!(!applied);
     }
+
+    #[tokio::test]
+    async fn validate_backup_rejects_checksum_mismatch() {
+        let db = setup().await;
+        let dir = tempfile::TempDir::new().expect("temp");
+        let svc = BackupService::new(db, dir.path().to_path_buf());
+        let backup = dir.path().join("backup_bad_hash");
+        std::fs::create_dir_all(&backup).expect("dir");
+        std::fs::write(backup.join("pastecanvas.sqlite3"), b"dummy-db").expect("db");
+        std::fs::write(
+            backup.join("manifest.json"),
+            r#"{"version":1,"schemaVersion":1,"itemCount":1,"assetCount":0,"dbSha256":"deadbeef"}"#,
+        )
+        .expect("manifest");
+
+        let v = svc.validate_backup(&backup);
+        assert!(!v.valid);
+        assert!(
+            v.reason
+                .as_deref()
+                .unwrap_or("")
+                .contains("checksum mismatch"),
+            "reason = {:?}",
+            v.reason
+        );
+    }
+
+    #[tokio::test]
+    async fn apply_missing_backup_db_fails_and_keeps_marker() {
+        let dir = tempfile::TempDir::new().expect("temp");
+        let marker = serde_json::json!({
+            "backupPath": dir.path().join("does-not-exist").display().to_string()
+        });
+        std::fs::write(
+            dir.path().join("restore_pending.json"),
+            serde_json::to_string(&marker).unwrap(),
+        )
+        .expect("marker");
+
+        let err = BackupService::apply_pending_restore(dir.path()).expect_err("must fail");
+        assert!(err.to_string().contains("not found"));
+        assert!(
+            dir.path().join("restore_pending.json").exists(),
+            "marker must remain so the user can retry"
+        );
+    }
 }

@@ -9,13 +9,10 @@ const FORWARDED_EVENTS = [
   "paste-canvas://show-settings",
   "paste-canvas://focus-search",
   "paste-canvas://toggle-capture-pause",
-  // CAP-009: out-of-process captures (tray / explorer / browser) refresh Inbox
-  "pastecanvas:item-captured",
-  // CAP-001: capture outcome feedback (hotkey + tray emitters)
-  "capture://success",
-  "capture://failed",
+  "paste-canvas://item-captured",
   "paste-canvas://capture-success",
   "paste-canvas://capture-failed",
+  "paste-canvas://session-suspended",
 ] as const;
 
 /**

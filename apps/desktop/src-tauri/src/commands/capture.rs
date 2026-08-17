@@ -44,6 +44,7 @@ pub struct CaptureTextCommandResponse {
 /// Captures text content — called from frontend Quick Capture or hotkey handler.
 #[tauri::command]
 pub async fn capture_text(
+    app: tauri::AppHandle,
     state: State<'_, AppState>,
     request: CaptureTextCommandRequest,
 ) -> Result<CaptureTextCommandResponse, String> {
@@ -59,6 +60,8 @@ pub async fn capture_text(
         .await
         .map_err(|e| e.to_string())?;
 
+    crate::events::emit_item_captured(&app, result.item_id.as_str());
+
     Ok(CaptureTextCommandResponse {
         item_id: result.item_id.to_string(),
         committed_at: result.committed_at.as_millis(),
@@ -70,6 +73,7 @@ pub async fn capture_text(
 /// Captures the current clipboard text content — triggered by global hotkey.
 #[tauri::command]
 pub async fn capture_clipboard(
+    app: tauri::AppHandle,
     state: State<'_, AppState>,
     clipboard_text: String,
 ) -> Result<CaptureTextCommandResponse, String> {
@@ -88,6 +92,8 @@ pub async fn capture_clipboard(
         })
         .await
         .map_err(|e| e.to_string())?;
+
+    crate::events::emit_item_captured(&app, result.item_id.as_str());
 
     Ok(CaptureTextCommandResponse {
         item_id: result.item_id.to_string(),
@@ -109,11 +115,11 @@ pub struct CaptureImageRequest {
 /// Captures an image from base64 data (clipboard image or drag/drop).
 #[tauri::command]
 pub async fn capture_image(
+    app: tauri::AppHandle,
     state: State<'_, AppState>,
     request: CaptureImageRequest,
 ) -> Result<CaptureTextCommandResponse, String> {
-    use crate::domain::entities::item::{InboxStatus, Item};
-    use crate::domain::value_objects::{EntityId, ItemType, UnixMs};
+    use crate::domain::value_objects::{EntityId, UnixMs};
     use base64::Engine;
 
     // Decode base64
@@ -134,95 +140,27 @@ pub async fn capture_image(
     let now = UnixMs::now();
     let item_id = EntityId::new();
 
-    // Create item
-    let item = Item {
-        id: item_id.clone(),
-        item_type: ItemType::Image,
-        title: Some("Clipboard Image".to_string()),
-        plain_text: None,
-        normalized_url: None,
-        display_url: None,
-        content_hash: Some(staged.sha256.clone()),
-        inbox_status: InboxStatus::New,
-        is_favorite: false,
-        is_pinned: false,
-        capture_method: CaptureMethod::ManualHotkey,
-        capture_session_id: None,
-        source_context_id: None,
-        created_at: now,
-        updated_at: now,
-        revision: 1,
-        origin_device_id: state.device_id.clone(),
-        last_modified_device_id: state.device_id.clone(),
-        deleted_at: None,
-    };
-
-    // Insert item + asset + relation in transaction
-    let mut tx = state.db.pool().begin().await.map_err(|e| e.to_string())?;
-
-    sqlx::query(
-        "INSERT INTO items (id, item_type, title, content_hash, inbox_status, is_favorite, is_pinned,
-          capture_method, created_at, updated_at, revision, origin_device_id, last_modified_device_id, sync_state)
-         VALUES (?, 'image', ?, ?, 'new', 0, 0, 'manual_hotkey', ?, ?, 1, ?, ?, 'local_only')",
-    )
-    .bind(item.id.as_str())
-    .bind(&item.title)
-    .bind(&staged.sha256)
-    .bind(now.as_millis())
-    .bind(now.as_millis())
-    .bind(state.device_id.as_str())
-    .bind(state.device_id.as_str())
-    .execute(&mut *tx)
-    .await
-    .map_err(|e| e.to_string())?;
-
-    // Insert asset (or skip if duplicate hash)
-    let asset_id = EntityId::new();
-    sqlx::query(
-        "INSERT OR IGNORE INTO assets (id, sha256, media_kind, mime_type, byte_size, relative_path, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?)",
-    )
-    .bind(asset_id.as_str())
-    .bind(&staged.sha256)
-    .bind(staged.media_kind.as_str())
-    .bind(&staged.mime_type)
-    .bind(staged.byte_size as i64)
-    .bind(&staged.relative_path)
-    .bind(now.as_millis())
-    .execute(&mut *tx)
-    .await
-    .map_err(|e| e.to_string())?;
-
-    // Get actual asset ID (might be existing if dedup)
-    let actual_asset: (String,) = sqlx::query_as("SELECT id FROM assets WHERE sha256 = ?")
-        .bind(&staged.sha256)
-        .fetch_one(&mut *tx)
+    state
+        .db
+        .insert_captured_asset_item(
+            item_id.as_str(),
+            "image",
+            "Clipboard Image",
+            "manual_hotkey",
+            state.device_id.as_str(),
+            now.as_millis(),
+            &staged.sha256,
+            staged.media_kind.as_str(),
+            &staged.mime_type,
+            staged.byte_size as i64,
+            &staged.relative_path,
+            request.source_app.as_deref().unwrap_or(""),
+            "clipboard_image.png",
+        )
         .await
         .map_err(|e| e.to_string())?;
 
-    // Link item to asset
-    sqlx::query(
-        "INSERT OR IGNORE INTO item_assets (item_id, asset_id, role, sort_order) VALUES (?, ?, 'primary', 0)",
-    )
-    .bind(item.id.as_str())
-    .bind(&actual_asset.0)
-    .execute(&mut *tx)
-    .await
-    .map_err(|e| e.to_string())?;
-
-    // Search document
-    sqlx::query(
-        "INSERT INTO search_documents (item_id, title, body, url, domain, source_app, tags_text, filename, updated_at)
-         VALUES (?, 'Clipboard Image', '', '', '', ?, '', 'clipboard_image.png', ?)",
-    )
-    .bind(item.id.as_str())
-    .bind(request.source_app.as_deref().unwrap_or(""))
-    .bind(now.as_millis())
-    .execute(&mut *tx)
-    .await
-    .map_err(|e| e.to_string())?;
-
-    tx.commit().await.map_err(|e| e.to_string())?;
+    crate::events::emit_item_captured(&app, item_id.as_str());
 
     tracing::info!(
         event = "image_captured",
@@ -242,6 +180,7 @@ pub async fn capture_image(
 /// Captures a screenshot of the entire virtual screen.
 #[tauri::command]
 pub async fn capture_screenshot(
+    app: tauri::AppHandle,
     state: State<'_, AppState>,
 ) -> Result<CaptureTextCommandResponse, String> {
     use crate::domain::value_objects::{EntityId, UnixMs};
@@ -258,65 +197,27 @@ pub async fn capture_screenshot(
     let now = UnixMs::now();
     let item_id = EntityId::new();
 
-    // Insert item + asset in transaction
-    let mut tx = state.db.pool().begin().await.map_err(|e| e.to_string())?;
-
-    sqlx::query(
-        "INSERT INTO items (id, item_type, title, content_hash, inbox_status, is_favorite, is_pinned,
-          capture_method, created_at, updated_at, revision, origin_device_id, last_modified_device_id, sync_state)
-         VALUES (?, 'screenshot', ?, ?, 'new', 0, 0, 'screenshot', ?, ?, 1, ?, ?, 'local_only')",
-    )
-    .bind(item_id.as_str())
-    .bind("Screenshot")
-    .bind(&staged.sha256)
-    .bind(now.as_millis())
-    .bind(now.as_millis())
-    .bind(state.device_id.as_str())
-    .bind(state.device_id.as_str())
-    .execute(&mut *tx)
-    .await
-    .map_err(|e| e.to_string())?;
-
-    let asset_id = EntityId::new();
-    sqlx::query(
-        "INSERT OR IGNORE INTO assets (id, sha256, media_kind, mime_type, byte_size, relative_path, created_at)
-         VALUES (?, ?, 'image', 'image/png', ?, ?, ?)",
-    )
-    .bind(asset_id.as_str())
-    .bind(&staged.sha256)
-    .bind(staged.byte_size as i64)
-    .bind(&staged.relative_path)
-    .bind(now.as_millis())
-    .execute(&mut *tx)
-    .await
-    .map_err(|e| e.to_string())?;
-
-    let actual_asset: (String,) = sqlx::query_as("SELECT id FROM assets WHERE sha256 = ?")
-        .bind(&staged.sha256)
-        .fetch_one(&mut *tx)
+    state
+        .db
+        .insert_captured_asset_item(
+            item_id.as_str(),
+            "screenshot",
+            "Screenshot",
+            "screenshot",
+            state.device_id.as_str(),
+            now.as_millis(),
+            &staged.sha256,
+            "image",
+            "image/png",
+            staged.byte_size as i64,
+            &staged.relative_path,
+            "",
+            "screenshot.png",
+        )
         .await
         .map_err(|e| e.to_string())?;
 
-    sqlx::query(
-        "INSERT OR IGNORE INTO item_assets (item_id, asset_id, role, sort_order) VALUES (?, ?, 'primary', 0)",
-    )
-    .bind(item_id.as_str())
-    .bind(&actual_asset.0)
-    .execute(&mut *tx)
-    .await
-    .map_err(|e| e.to_string())?;
-
-    sqlx::query(
-        "INSERT INTO search_documents (item_id, title, body, url, domain, source_app, tags_text, filename, updated_at)
-         VALUES (?, 'Screenshot', '', '', '', '', '', 'screenshot.png', ?)",
-    )
-    .bind(item_id.as_str())
-    .bind(now.as_millis())
-    .execute(&mut *tx)
-    .await
-    .map_err(|e| e.to_string())?;
-
-    tx.commit().await.map_err(|e| e.to_string())?;
+    crate::events::emit_item_captured(&app, item_id.as_str());
 
     tracing::info!(
         event = "screenshot_captured",
@@ -429,64 +330,27 @@ pub async fn capture_region_screenshot(
     let now = UnixMs::now();
     let item_id = EntityId::new();
 
-    let mut tx = state.db.pool().begin().await.map_err(|e| e.to_string())?;
-
-    sqlx::query(
-        "INSERT INTO items (id, item_type, title, content_hash, inbox_status, is_favorite, is_pinned,
-          capture_method, created_at, updated_at, revision, origin_device_id, last_modified_device_id, sync_state)
-         VALUES (?, 'screenshot', ?, ?, 'new', 0, 0, 'screenshot', ?, ?, 1, ?, ?, 'local_only')",
-    )
-    .bind(item_id.as_str())
-    .bind("Region Screenshot")
-    .bind(&staged.sha256)
-    .bind(now.as_millis())
-    .bind(now.as_millis())
-    .bind(state.device_id.as_str())
-    .bind(state.device_id.as_str())
-    .execute(&mut *tx)
-    .await
-    .map_err(|e| e.to_string())?;
-
-    let asset_id = EntityId::new();
-    sqlx::query(
-        "INSERT OR IGNORE INTO assets (id, sha256, media_kind, mime_type, byte_size, relative_path, created_at)
-         VALUES (?, ?, 'image', 'image/png', ?, ?, ?)",
-    )
-    .bind(asset_id.as_str())
-    .bind(&staged.sha256)
-    .bind(staged.byte_size as i64)
-    .bind(&staged.relative_path)
-    .bind(now.as_millis())
-    .execute(&mut *tx)
-    .await
-    .map_err(|e| e.to_string())?;
-
-    let actual_asset: (String,) = sqlx::query_as("SELECT id FROM assets WHERE sha256 = ?")
-        .bind(&staged.sha256)
-        .fetch_one(&mut *tx)
+    state
+        .db
+        .insert_captured_asset_item(
+            item_id.as_str(),
+            "screenshot",
+            "Region Screenshot",
+            "screenshot",
+            state.device_id.as_str(),
+            now.as_millis(),
+            &staged.sha256,
+            "image",
+            "image/png",
+            staged.byte_size as i64,
+            &staged.relative_path,
+            "",
+            "region_screenshot.png",
+        )
         .await
         .map_err(|e| e.to_string())?;
 
-    sqlx::query(
-        "INSERT OR IGNORE INTO item_assets (item_id, asset_id, role, sort_order) VALUES (?, ?, 'primary', 0)",
-    )
-    .bind(item_id.as_str())
-    .bind(&actual_asset.0)
-    .execute(&mut *tx)
-    .await
-    .map_err(|e| e.to_string())?;
-
-    sqlx::query(
-        "INSERT INTO search_documents (item_id, title, body, url, domain, source_app, tags_text, filename, updated_at)
-         VALUES (?, 'Region Screenshot', '', '', '', '', '', 'region_screenshot.png', ?)",
-    )
-    .bind(item_id.as_str())
-    .bind(now.as_millis())
-    .execute(&mut *tx)
-    .await
-    .map_err(|e| e.to_string())?;
-
-    tx.commit().await.map_err(|e| e.to_string())?;
+    crate::events::emit_item_captured(&app, item_id.as_str());
 
     tracing::info!(
         event = "region_screenshot_captured",

@@ -13,7 +13,7 @@ export function SessionControl() {
     try {
       const s = await getSession();
       setSession(s);
-      window.dispatchEvent(new CustomEvent("pastecanvas://session-state", {
+      window.dispatchEvent(new CustomEvent("paste-canvas://session-state", {
         detail: { state: s?.state ?? null },
       }));
     } catch { /* ignore */ }

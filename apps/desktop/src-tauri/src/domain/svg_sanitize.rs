@@ -2,262 +2,571 @@
 //! Per AGENTS.md: "HTML、SVG 與 rich text 一律視為不可信輸入"
 //! Per AGENTS.md security: "safe SVG sanitization/raster thumbnail"
 //!
-//! Strips:
-//! - <script> elements
-//! - Event handler attributes (onclick, onload, etc.)
-//! - External references (xlink:href to external URLs)
-//! - <foreignObject> elements
-//! - CSS expressions and url() references
-//! - JavaScript: protocol in href attributes
+//! Whitelist rewriter: only known-safe tags and attributes are emitted.
+//! URL-bearing values are entity-decoded and compacted before scheme checks
+//! so `jav&#x61;script:`, unquoted handlers, protocol-relative URLs, and
+//! `data:`/`file:` cannot slip through.
 
-/// Sanitizes SVG content by removing potentially dangerous elements and attributes.
+/// Sanitizes SVG content by rewriting it through a tag/attribute allow-list.
 /// Returns the sanitized SVG string, or None if the input is not valid SVG.
 pub fn sanitize_svg(input: &str) -> Option<String> {
     let trimmed = input.trim();
-
-    // Must look like SVG
-    if !trimmed.contains("<svg") && !trimmed.contains("<SVG") {
+    if !trimmed.to_ascii_lowercase().contains("<svg") {
         return None;
     }
 
-    let mut result = trimmed.to_string();
-
-    // Remove <script>...</script> blocks (including multiline)
-    result = remove_elements(&result, "script");
-
-    // Remove <foreignObject>...</foreignObject> blocks
-    result = remove_elements(&result, "foreignObject");
-
-    // Remove <iframe> elements
-    result = remove_elements(&result, "iframe");
-
-    // Remove <embed> elements
-    result = remove_elements(&result, "embed");
-
-    // Remove <object> elements
-    result = remove_elements(&result, "object");
-
-    // Remove event handler attributes (on*)
-    result = remove_event_handlers(&result);
-
-    // Remove javascript: protocol references
-    result = remove_javascript_urls(&result);
-
-    // Remove external xlink:href references (keep internal #references)
-    result = remove_external_references(&result);
-
-    // Remove CSS expression() and url() with external references
-    result = remove_css_expressions(&result);
-
-    Some(result)
+    let rewritten = rewrite_whitelist(trimmed);
+    if !rewritten.to_ascii_lowercase().contains("<svg") {
+        return None;
+    }
+    Some(rewritten)
 }
 
-/// Removes all instances of a given element (opening tag, content, closing tag).
-fn remove_elements(input: &str, tag: &str) -> String {
-    let mut result = input.to_string();
-    let open_pattern = format!("<{}", tag.to_lowercase());
-    let close_pattern = format!("</{}", tag.to_lowercase());
+/// Checks if SVG content is safe (no dangerous elements detected).
+/// Used as a defense-in-depth gate after sanitization.
+pub fn is_svg_safe(input: &str) -> bool {
+    let lower = input.to_lowercase();
+    let compact: String = lower.chars().filter(|c| !c.is_whitespace()).collect();
+    let decoded = decode_entities(&compact);
 
-    loop {
-        let lower = result.to_lowercase();
-        let pos = match lower.find(&open_pattern) {
-            Some(p) => p,
-            None => break,
-        };
+    !lower.contains("<script")
+        && !lower.contains("<foreignobject")
+        && !lower.contains("<iframe")
+        && !lower.contains("<embed")
+        && !lower.contains("<object")
+        && !lower.contains("<style")
+        && !decoded.contains("javascript:")
+        && !decoded.contains("vbscript:")
+        && !decoded.contains("data:")
+        && !decoded.contains("file:")
+        && !has_event_handler(&lower)
+        && !lower.contains("expression(")
+}
 
-        // Find end of opening tag
-        let tag_end = match result[pos..].find('>') {
-            Some(e) => pos + e + 1,
-            None => break,
-        };
+fn has_event_handler(lower: &str) -> bool {
+    let bytes = lower.as_bytes();
+    let mut i = 0;
+    while i + 3 < bytes.len() {
+        if bytes[i] == b' ' || bytes[i] == b'\t' || bytes[i] == b'\n' || bytes[i] == b'\r' {
+            if bytes[i + 1] == b'o' && bytes[i + 2] == b'n' {
+                let mut j = i + 3;
+                while j < bytes.len() && bytes[j].is_ascii_alphabetic() {
+                    j += 1;
+                }
+                while j < bytes.len() && bytes[j].is_ascii_whitespace() {
+                    j += 1;
+                }
+                if j < bytes.len() && bytes[j] == b'=' && j > i + 3 {
+                    return true;
+                }
+            }
+        }
+        i += 1;
+    }
+    false
+}
 
-        // Check if self-closing
-        if result[pos..tag_end].ends_with("/>") {
-            result = format!("{}{}", &result[..pos], &result[tag_end..]);
+const ALLOWED_TAGS: &[&str] = &[
+    "svg",
+    "g",
+    "path",
+    "rect",
+    "circle",
+    "ellipse",
+    "line",
+    "polyline",
+    "polygon",
+    "text",
+    "tspan",
+    "defs",
+    "lineargradient",
+    "radialgradient",
+    "stop",
+    "clippath",
+    "mask",
+    "use",
+    "symbol",
+    "marker",
+    "title",
+    "desc",
+    "metadata",
+    "pattern",
+];
+
+const ALLOWED_ATTRS: &[&str] = &[
+    "id",
+    "class",
+    "viewbox",
+    "width",
+    "height",
+    "x",
+    "y",
+    "x1",
+    "y1",
+    "x2",
+    "y2",
+    "cx",
+    "cy",
+    "r",
+    "rx",
+    "ry",
+    "dx",
+    "dy",
+    "d",
+    "points",
+    "fill",
+    "stroke",
+    "stroke-width",
+    "stroke-linecap",
+    "stroke-linejoin",
+    "stroke-miterlimit",
+    "stroke-dasharray",
+    "stroke-dashoffset",
+    "stroke-opacity",
+    "fill-opacity",
+    "fill-rule",
+    "clip-rule",
+    "opacity",
+    "transform",
+    "gradientunits",
+    "gradienttransform",
+    "offset",
+    "stop-color",
+    "stop-opacity",
+    "clip-path",
+    "clippathunits",
+    "mask",
+    "maskunits",
+    "maskcontentunits",
+    "preserveaspectratio",
+    "xmlns",
+    "xmlns:xlink",
+    "version",
+    "overflow",
+    "visibility",
+    "display",
+    "font-size",
+    "font-family",
+    "font-weight",
+    "font-style",
+    "text-anchor",
+    "dominant-baseline",
+    "alignment-baseline",
+    "letter-spacing",
+    "word-spacing",
+    "rotate",
+    "textlength",
+    "lengthadjust",
+    "spreadmethod",
+    "fx",
+    "fy",
+    "fr",
+    "patternunits",
+    "patterncontentunits",
+    "patterntransform",
+    "marker-start",
+    "marker-mid",
+    "marker-end",
+    "markerunits",
+    "markerwidth",
+    "markerheight",
+    "refx",
+    "refy",
+    "orient",
+    "xml:space",
+    "role",
+    "aria-label",
+    "aria-hidden",
+];
+
+fn is_allowed_tag(name: &str) -> bool {
+    ALLOWED_TAGS.contains(&name.to_ascii_lowercase().as_str())
+}
+
+fn is_allowed_attr(name: &str) -> bool {
+    let lower = name.to_ascii_lowercase();
+    ALLOWED_ATTRS.contains(&lower.as_str()) || lower == "href" || lower == "xlink:href"
+}
+
+fn rewrite_whitelist(input: &str) -> String {
+    let chars: Vec<char> = input.chars().collect();
+    let mut i = 0;
+    let mut out = String::with_capacity(input.len());
+    let mut skip_stack: Vec<String> = Vec::new();
+
+    while i < chars.len() {
+        if chars[i] != '<' {
+            if skip_stack.is_empty() {
+                out.push(chars[i]);
+            }
+            i += 1;
             continue;
         }
 
-        // Find closing tag
-        let close_start = match result[tag_end..].to_lowercase().find(&close_pattern) {
-            Some(c) => tag_end + c,
+        if starts_with_at(&chars, i, "<!--") {
+            i = skip_until(&chars, i + 4, "-->");
+            continue;
+        }
+        if starts_with_at(&chars, i, "<![CDATA[") {
+            i = skip_until(&chars, i + 9, "]]>");
+            continue;
+        }
+        if starts_with_at(&chars, i, "<?") {
+            i = skip_until(&chars, i + 2, "?>");
+            continue;
+        }
+        if starts_with_at(&chars, i, "<!") {
+            i = skip_until(&chars, i + 2, ">");
+            continue;
+        }
+
+        match parse_tag(&chars, i) {
             None => {
-                // No closing tag, just remove the opening tag
-                result = format!("{}{}", &result[..pos], &result[tag_end..]);
-                continue;
+                if skip_stack.is_empty() {
+                    out.push(chars[i]);
+                }
+                i += 1;
             }
-        };
+            Some((tag, next)) => {
+                i = next;
+                let name_l = tag.name.to_ascii_lowercase();
+                if tag.closing {
+                    if let Some(last) = skip_stack.last() {
+                        if last == &name_l {
+                            skip_stack.pop();
+                        }
+                    } else if is_allowed_tag(&name_l) {
+                        out.push_str("</");
+                        out.push_str(&tag.name);
+                        out.push('>');
+                    }
+                    continue;
+                }
 
-        // Find end of closing tag
-        let close_end = match result[close_start..].find('>') {
-            Some(e) => close_start + e + 1,
-            None => break,
-        };
+                if !skip_stack.is_empty() {
+                    if !tag.self_closing {
+                        skip_stack.push(name_l);
+                    }
+                    continue;
+                }
 
-        // Remove from opening tag start to closing tag end
-        result = format!("{}{}", &result[..pos], &result[close_end..]);
-    }
+                if !is_allowed_tag(&name_l) {
+                    if !tag.self_closing {
+                        skip_stack.push(name_l);
+                    }
+                    continue;
+                }
 
-    result
-}
-
-/// Removes event handler attributes (onclick, onload, onerror, etc.)
-fn remove_event_handlers(input: &str) -> String {
-    let mut result = input.to_string();
-
-    // Common SVG/HTML event handlers
-    let handlers = [
-        "onclick",
-        "ondblclick",
-        "onmousedown",
-        "onmouseup",
-        "onmouseover",
-        "onmousemove",
-        "onmouseout",
-        "onmouseenter",
-        "onmouseleave",
-        "onkeydown",
-        "onkeypress",
-        "onkeyup",
-        "onfocus",
-        "onblur",
-        "onchange",
-        "oninput",
-        "onsubmit",
-        "onreset",
-        "onload",
-        "onunload",
-        "onerror",
-        "onresize",
-        "onscroll",
-        "onabort",
-        "oncanplay",
-        "onemptied",
-        "onended",
-        "onanimationstart",
-        "onanimationend",
-        "onanimationiteration",
-        "ontransitionend",
-        "onbegin",
-        "onend",
-        "onrepeat",
-    ];
-
-    for handler in &handlers {
-        // Remove handler="..." and handler='...'
-        let patterns = [format!("{}=\"", handler), format!("{}='", handler)];
-
-        for pattern in &patterns {
-            while let Some(pos) = result.to_lowercase().find(pattern) {
-                let quote = pattern.chars().last().unwrap();
-                let value_start = pos + pattern.len();
-                if let Some(value_end) = result[value_start..].find(quote) {
-                    // Also remove preceding whitespace
-                    let ws_start = result[..pos]
-                        .rfind(|c: char| !c.is_whitespace())
-                        .map(|p| p + 1)
-                        .unwrap_or(pos);
-                    result = format!(
-                        "{}{}",
-                        &result[..ws_start],
-                        &result[value_start + value_end + 1..]
-                    );
+                out.push('<');
+                out.push_str(&tag.name);
+                for (aname, aval) in tag.attrs {
+                    if !is_allowed_attr(&aname) {
+                        continue;
+                    }
+                    if !attr_value_allowed(&aname, &aval) {
+                        continue;
+                    }
+                    out.push(' ');
+                    out.push_str(&aname);
+                    out.push('=');
+                    out.push('"');
+                    out.push_str(&escape_attr(&aval));
+                    out.push('"');
+                }
+                if tag.self_closing {
+                    out.push_str("/>");
                 } else {
-                    break;
+                    out.push('>');
                 }
             }
         }
     }
 
-    result
+    out
 }
 
-/// Removes javascript: protocol in href/xlink:href attributes.
-fn remove_javascript_urls(input: &str) -> String {
-    let mut result = input.to_string();
+struct ParsedTag {
+    name: String,
+    closing: bool,
+    self_closing: bool,
+    attrs: Vec<(String, String)>,
+}
 
-    // Replace javascript: URLs with empty
-    let patterns = ["javascript:", "vbscript:", "data:text/html"];
-    for pattern in &patterns {
-        while let Some(pos) = result.to_lowercase().find(pattern) {
-            // Find the attribute value boundaries
-            let before = &result[..pos];
-            let quote_start = before.rfind(['"', '\'']).unwrap_or(0);
-            let quote_char = result.chars().nth(quote_start).unwrap_or('"');
-            if let Some(quote_end) = result[pos..].find(quote_char) {
-                result = format!(
-                    "{}{}",
-                    &result[..quote_start + 1],
-                    &result[pos + quote_end..]
-                );
-            } else {
-                break;
+fn parse_tag(chars: &[char], start: usize) -> Option<(ParsedTag, usize)> {
+    if start >= chars.len() || chars[start] != '<' {
+        return None;
+    }
+    let mut i = start + 1;
+    let closing = i < chars.len() && chars[i] == '/';
+    if closing {
+        i += 1;
+    }
+
+    let name_start = i;
+    while i < chars.len() && is_name_char(chars[i]) {
+        i += 1;
+    }
+    if i == name_start {
+        return None;
+    }
+    let name: String = chars[name_start..i].iter().collect();
+
+    let mut attrs = Vec::new();
+    if !closing {
+        loop {
+            while i < chars.len() && chars[i].is_whitespace() {
+                i += 1;
             }
+            if i >= chars.len() {
+                return None;
+            }
+            if chars[i] == '>' {
+                i += 1;
+                return Some((
+                    ParsedTag {
+                        name,
+                        closing,
+                        self_closing: false,
+                        attrs,
+                    },
+                    i,
+                ));
+            }
+            if chars[i] == '/' && i + 1 < chars.len() && chars[i + 1] == '>' {
+                return Some((
+                    ParsedTag {
+                        name,
+                        closing,
+                        self_closing: true,
+                        attrs,
+                    },
+                    i + 2,
+                ));
+            }
+
+            let aname_start = i;
+            while i < chars.len() && is_name_char(chars[i]) {
+                i += 1;
+            }
+            if i == aname_start {
+                // Malformed — skip to end of tag.
+                while i < chars.len() && chars[i] != '>' {
+                    i += 1;
+                }
+                if i < chars.len() {
+                    i += 1;
+                }
+                return Some((
+                    ParsedTag {
+                        name,
+                        closing,
+                        self_closing: false,
+                        attrs,
+                    },
+                    i,
+                ));
+            }
+            let aname: String = chars[aname_start..i].iter().collect();
+            while i < chars.len() && chars[i].is_whitespace() {
+                i += 1;
+            }
+            let aval = if i < chars.len() && chars[i] == '=' {
+                i += 1;
+                while i < chars.len() && chars[i].is_whitespace() {
+                    i += 1;
+                }
+                if i < chars.len() && (chars[i] == '"' || chars[i] == '\'') {
+                    let quote = chars[i];
+                    i += 1;
+                    let vstart = i;
+                    while i < chars.len() && chars[i] != quote {
+                        i += 1;
+                    }
+                    let value: String = chars[vstart..i].iter().collect();
+                    if i < chars.len() {
+                        i += 1;
+                    }
+                    value
+                } else {
+                    let vstart = i;
+                    while i < chars.len()
+                        && !chars[i].is_whitespace()
+                        && chars[i] != '>'
+                        && chars[i] != '/'
+                    {
+                        i += 1;
+                    }
+                    chars[vstart..i].iter().collect()
+                }
+            } else {
+                String::new()
+            };
+            attrs.push((aname, aval));
         }
     }
 
-    result
+    while i < chars.len() && chars[i].is_whitespace() {
+        i += 1;
+    }
+    if i < chars.len() && chars[i] == '>' {
+        i += 1;
+    }
+    Some((
+        ParsedTag {
+            name,
+            closing,
+            self_closing: false,
+            attrs,
+        },
+        i,
+    ))
 }
 
-/// Removes external references in xlink:href (keeps internal #fragment references).
-fn remove_external_references(input: &str) -> String {
-    let mut result = input.to_string();
+fn is_name_char(c: char) -> bool {
+    c.is_ascii_alphanumeric() || c == ':' || c == '-' || c == '_'
+}
 
-    // Find xlink:href or href attributes with external URLs
-    let patterns = [
-        "xlink:href=\"http",
-        "xlink:href='http",
-        "href=\"http",
-        "href='http",
-    ];
-    for pattern in &patterns {
-        while let Some(pos) = result.to_lowercase().find(&pattern.to_lowercase()) {
-            let quote = pattern.chars().last().unwrap();
-            let value_start = pos + pattern.len() - 1; // Include the 'h' of http
-            if let Some(value_end) = result[value_start..].find(quote) {
-                let ws_start = result[..pos]
-                    .rfind(|c: char| !c.is_whitespace())
-                    .map(|p| p + 1)
-                    .unwrap_or(pos);
-                result = format!(
-                    "{}{}",
-                    &result[..ws_start],
-                    &result[value_start + value_end + 1..]
-                );
-            } else {
+fn starts_with_at(chars: &[char], i: usize, pat: &str) -> bool {
+    let p: Vec<char> = pat.chars().collect();
+    if i + p.len() > chars.len() {
+        return false;
+    }
+    chars[i..i + p.len()]
+        .iter()
+        .zip(p.iter())
+        .all(|(a, b)| a.eq_ignore_ascii_case(b))
+}
+
+fn skip_until(chars: &[char], mut i: usize, end: &str) -> usize {
+    let e: Vec<char> = end.chars().collect();
+    while i + e.len() <= chars.len() {
+        if chars[i..i + e.len()] == e[..] {
+            return i + e.len();
+        }
+        i += 1;
+    }
+    chars.len()
+}
+
+fn attr_value_allowed(name: &str, value: &str) -> bool {
+    let name_l = name.to_ascii_lowercase();
+    // Event handlers are on*; keep allow-listed names like `orient`.
+    if name_l.starts_with("on") && !ALLOWED_ATTRS.contains(&name_l.as_str()) {
+        return false;
+    }
+    if name_l == "style" {
+        return false;
+    }
+    if name_l == "href" || name_l == "xlink:href" || name_l == "src" {
+        return is_safe_url(value);
+    }
+    if name_l == "fill" || name_l == "stroke" || name_l == "clip-path" || name_l == "mask" {
+        return is_safe_paint(value);
+    }
+    let decoded = decode_entities(value);
+    let compact: String = decoded
+        .chars()
+        .filter(|c| !c.is_whitespace())
+        .collect::<String>()
+        .to_ascii_lowercase();
+    !compact.contains("javascript:")
+        && !compact.contains("vbscript:")
+        && !compact.contains("data:")
+        && !compact.contains("file:")
+}
+
+fn is_safe_url(value: &str) -> bool {
+    let decoded = decode_entities(value);
+    let compact: String = decoded
+        .chars()
+        .filter(|c| !c.is_whitespace())
+        .collect::<String>();
+    let lower = compact.to_ascii_lowercase();
+    if lower.is_empty() {
+        return true;
+    }
+    lower.starts_with('#') && !lower[1..].contains(':')
+}
+
+fn is_safe_paint(value: &str) -> bool {
+    let decoded = decode_entities(value);
+    let compact: String = decoded
+        .chars()
+        .filter(|c| !c.is_whitespace())
+        .collect::<String>();
+    let lower = compact.to_ascii_lowercase();
+    if let Some(rest) = lower.strip_prefix("url(") {
+        let inner = rest
+            .trim_end_matches(')')
+            .trim_matches(|c| c == '"' || c == '\'');
+        return inner.starts_with('#') && !inner.contains(':');
+    }
+    !lower.contains("javascript:")
+        && !lower.contains("vbscript:")
+        && !lower.contains("data:")
+        && !lower.contains("file:")
+}
+
+fn escape_attr(value: &str) -> String {
+    value
+        .replace('&', "&amp;")
+        .replace('"', "&quot;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+}
+
+fn decode_entities(input: &str) -> String {
+    let mut out = String::with_capacity(input.len());
+    let mut chars = input.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c != '&' {
+            out.push(c);
+            continue;
+        }
+        let mut ent = String::new();
+        let mut found = false;
+        while let Some(&n) = chars.peek() {
+            if n == ';' {
+                chars.next();
+                found = true;
                 break;
             }
+            if n == '&' || ent.len() > 16 {
+                break;
+            }
+            ent.push(n);
+            chars.next();
         }
-    }
-
-    result
-}
-
-/// Removes CSS expression() and external url() references.
-fn remove_css_expressions(input: &str) -> String {
-    let mut result = input.to_string();
-
-    // Remove expression(...)
-    while let Some(pos) = result.to_lowercase().find("expression(") {
-        if let Some(end) = result[pos..].find(')') {
-            result = format!("{}{}", &result[..pos], &result[pos + end + 1..]);
+        if found {
+            if let Some(ch) = decode_one(&ent) {
+                out.push(ch);
+            } else {
+                out.push('&');
+                out.push_str(&ent);
+                out.push(';');
+            }
         } else {
-            break;
+            out.push('&');
+            out.push_str(&ent);
         }
     }
-
-    result
+    out
 }
 
-/// Checks if SVG content is safe (no dangerous elements detected).
-pub fn is_svg_safe(input: &str) -> bool {
-    let lower = input.to_lowercase();
-    !lower.contains("<script")
-        && !lower.contains("javascript:")
-        && !lower.contains("onload=")
-        && !lower.contains("onclick=")
-        && !lower.contains("onerror=")
-        && !lower.contains("<foreignobject")
-        && !lower.contains("expression(")
+fn decode_one(ent: &str) -> Option<char> {
+    match ent {
+        "amp" => Some('&'),
+        "lt" => Some('<'),
+        "gt" => Some('>'),
+        "quot" => Some('"'),
+        "apos" => Some('\''),
+        "nbsp" => Some(' '),
+        _ if ent.starts_with("#x") || ent.starts_with("#X") => u32::from_str_radix(&ent[2..], 16)
+            .ok()
+            .and_then(char::from_u32),
+        _ if ent.starts_with('#') => ent[1..].parse::<u32>().ok().and_then(char::from_u32),
+        _ => None,
+    }
 }
 
 #[cfg(test)]
@@ -334,5 +643,48 @@ mod tests {
         assert!(!is_svg_safe(r#"<svg><script>alert(1)</script></svg>"#));
         assert!(!is_svg_safe(r#"<svg onload="alert(1)"></svg>"#));
         assert!(!is_svg_safe(r#"<svg><a href="javascript:void(0)"/></svg>"#));
+    }
+
+    #[test]
+    fn strips_entity_encoded_javascript() {
+        let svg = r#"<svg><use href="jav&#x61;script:alert(1)"/></svg>"#;
+        let result = sanitize_svg(svg).unwrap();
+        assert!(!result.to_lowercase().contains("javascript"));
+        assert!(!result.contains("alert"));
+    }
+
+    #[test]
+    fn strips_unquoted_event_handler() {
+        let svg = r#"<svg><rect onclick=alert(1) width="10" height="10"/></svg>"#;
+        let result = sanitize_svg(svg).unwrap();
+        assert!(!result.contains("onclick"));
+        assert!(!result.contains("alert"));
+        assert!(result.contains("rect"));
+    }
+
+    #[test]
+    fn strips_protocol_relative_and_data_urls() {
+        let svg = r#"<svg><use href="//evil.example/x" /><use xlink:href="data:text/html,x"/><use href="file:///etc/passwd"/></svg>"#;
+        let result = sanitize_svg(svg).unwrap();
+        assert!(!result.contains("evil.example"));
+        assert!(!result.contains("data:"));
+        assert!(!result.contains("file:"));
+    }
+
+    #[test]
+    fn strips_style_element_and_attribute() {
+        let svg = r#"<svg><style>@import url(https://evil)</style><rect style="fill:url(https://x)" width="1"/></svg>"#;
+        let result = sanitize_svg(svg).unwrap();
+        assert!(!result.contains("<style"));
+        assert!(!result.contains("@import"));
+        assert!(!result.contains("style="));
+        assert!(result.contains("rect"));
+    }
+
+    #[test]
+    fn sanitized_output_is_safe() {
+        let dirty = r#"<svg onload="alert(1)"><script>x</script><style>y</style><a href="javascript:1"/><rect onclick=alert(2) fill="url(#ok)"/></svg>"#;
+        let result = sanitize_svg(dirty).unwrap();
+        assert!(is_svg_safe(&result));
     }
 }

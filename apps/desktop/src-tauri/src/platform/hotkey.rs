@@ -1,12 +1,9 @@
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
 
-use tauri::{AppHandle, Emitter, Manager};
-use tauri_plugin_clipboard_manager::ClipboardExt;
+use tauri::{AppHandle, Emitter};
 use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut};
 
-use crate::application::capture_service::{CaptureService, CaptureTextRequest};
-use crate::bootstrap::app_state::AppState;
 use crate::domain::entities::item::CaptureMethod;
 
 /// Default capture shortcut: Ctrl+Shift+V
@@ -33,16 +30,12 @@ pub fn register_action_hotkey(
     let shortcut = parse_accelerator(accelerator)?;
 
     let mut reg = registry().lock().expect("hotkey registry");
-    match reg.get(action) {
-        Some(prev) if prev == accelerator => return Ok(()), // already bound
-        Some(prev) => {
-            if let Ok(prev_shortcut) = parse_accelerator(prev) {
-                let _ = app.global_shortcut().unregister(prev_shortcut);
-            }
-        }
-        None => {}
+    if reg.get(action).is_some_and(|prev| prev == accelerator) {
+        return Ok(());
     }
 
+    // Bind the new shortcut first so a registration failure cannot leave the
+    // previous (working) binding unregistered.
     let action_owned = action.to_string();
     app.global_shortcut()
         .on_shortcut(shortcut, move |app, _shortcut, event| {
@@ -53,7 +46,11 @@ pub fn register_action_hotkey(
         })
         .map_err(|e| format!("hotkey registration failed for {action}: {e}"))?;
 
-    reg.insert(action.to_string(), accelerator.to_string());
+    if let Some(prev) = reg.insert(action.to_string(), accelerator.to_string()) {
+        if let Ok(prev_shortcut) = parse_accelerator(&prev) {
+            let _ = app.global_shortcut().unregister(prev_shortcut);
+        }
+    }
     drop(reg);
 
     tracing::info!(
@@ -64,94 +61,23 @@ pub fn register_action_hotkey(
     Ok(())
 }
 
-/// CAP-001: captures the clipboard IMAGE when no text is present.
-/// Encodes RGBA → PNG (lossless, per DAT-001) and persists via the
-/// application capture service.
-async fn capture_clipboard_image(app: &AppHandle) {
-    let image = match app.clipboard().read_image() {
-        Ok(img) => img,
-        Err(_) => {
-            let _ = app.emit("capture://failed", "Clipboard is empty");
-            return;
-        }
-    };
-
-    let png = match crate::infrastructure::thumbnail::encode_png_rgba(
-        image.rgba(),
-        image.width(),
-        image.height(),
-    ) {
-        Ok(p) => p,
-        Err(e) => {
-            let _ = app.emit("capture://failed", format!("Image encode failed: {e}"));
-            return;
-        }
-    };
-
-    let state = app.state::<AppState>();
-    let svc = CaptureService::new(state.db.clone(), state.device_id.clone());
-    let data_dir = state.data_dir.clone();
-
-    match svc
-        .capture_png(&data_dir, png, None, CaptureMethod::ManualHotkey)
-        .await
-    {
-        Ok(result) => {
-            let _ = app.emit("capture://success", result.item_id.to_string());
-            let _ = app.emit("pastecanvas:item-captured", ());
-            tracing::info!(event = "hotkey_image_capture_success", item_id = %result.item_id);
-        }
-        Err(e) => {
-            let _ = app.emit("capture://failed", e.to_string());
-            tracing::error!(event = "hotkey_image_capture_failed", error = %e);
-        }
-    }
-}
-
 /// Dispatches a pressed global hotkey to its action handler.
 fn handle_action(app: &AppHandle, action: &str) {
     match action {
         "capture_clipboard" => {
             tracing::info!(event = "capture_hotkey_pressed");
-
-            // CAP-001: text first; when the clipboard holds no text, fall back
-            // to the clipboard image (also part of CAP-001's accepted formats).
-            let clipboard_text = app.clipboard().read_text().unwrap_or_default();
-
-            if clipboard_text.trim().is_empty() {
-                let app_handle = app.clone();
-                tauri::async_runtime::spawn(async move {
-                    capture_clipboard_image(&app_handle).await;
-                });
-                return;
-            }
-
-            let state = app.state::<AppState>();
-            let svc = CaptureService::new(state.db.clone(), state.device_id.clone());
-
+            let payload = crate::platform::clipboard::snapshot_clipboard(app);
             let app_handle = app.clone();
             tauri::async_runtime::spawn(async move {
-                match svc
-                    .capture_text(CaptureTextRequest {
-                        text: clipboard_text,
-                        capture_method: CaptureMethod::ManualHotkey,
-                        source_app: None,
-                        window_title: None,
-                    })
-                    .await
-                {
-                    Ok(result) => {
-                        let _ = app_handle.emit("capture://success", result.item_id.to_string());
-                        tracing::info!(
-                            event = "hotkey_capture_success",
-                            item_id = %result.item_id,
-                        );
-                    }
-                    Err(e) => {
-                        let _ = app_handle.emit("capture://failed", e.to_string());
-                        tracing::error!(event = "hotkey_capture_failed", error = %e);
-                    }
-                }
+                crate::platform::clipboard_persist::persist_and_emit(
+                    &app_handle,
+                    payload,
+                    CaptureMethod::ManualHotkey,
+                    None,
+                    None,
+                    true,
+                )
+                .await;
             });
         }
         "screenshot" => {
@@ -169,7 +95,7 @@ fn handle_action(app: &AppHandle, action: &str) {
         }
         "global_search" => {
             let _ = crate::platform::window_manager::show_main_window(app);
-            let _ = app.emit("paste-canvas://focus-search", ());
+            let _ = app.emit(crate::events::FOCUS_SEARCH, ());
         }
         other => {
             tracing::warn!(event = "unknown_hotkey_action", action = other);

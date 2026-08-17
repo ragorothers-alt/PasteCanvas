@@ -140,6 +140,9 @@ pub fn get_always_on_top(app: &tauri::AppHandle) -> Result<bool, String> {
 /// Shows and focuses the main window.
 pub fn show_main_window(app: &tauri::AppHandle) -> Result<(), String> {
     if let Some(window) = app.get_webview_window("main") {
+        if window.is_minimized().map_err(|e| e.to_string())? {
+            window.unminimize().map_err(|e| e.to_string())?;
+        }
         window.show().map_err(|e| e.to_string())?;
         window.set_focus().map_err(|e| e.to_string())?;
     }
@@ -157,9 +160,16 @@ pub fn hide_main_window(app: &tauri::AppHandle) -> Result<(), String> {
 /// Toggles main window visibility.
 pub fn toggle_main_window(app: &tauri::AppHandle) -> Result<(), String> {
     if let Some(window) = app.get_webview_window("main") {
-        if window.is_visible().map_err(|e| e.to_string())? {
+        let visible = window.is_visible().map_err(|e| e.to_string())?;
+        let minimized = window.is_minimized().map_err(|e| e.to_string())?;
+        // Minimized windows still report visible=true; hiding them again
+        // would swallow the window into the tray with no way to restore.
+        if visible && !minimized {
             window.hide().map_err(|e| e.to_string())?;
         } else {
+            if minimized {
+                window.unminimize().map_err(|e| e.to_string())?;
+            }
             window.show().map_err(|e| e.to_string())?;
             window.set_focus().map_err(|e| e.to_string())?;
         }

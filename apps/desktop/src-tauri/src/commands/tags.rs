@@ -137,24 +137,42 @@ pub async fn rename_tag(
 /// Soft-deletes a tag.
 #[tauri::command]
 pub async fn delete_tag(state: State<'_, AppState>, tag_id: String) -> Result<(), String> {
-    let now = UnixMs::now().as_millis();
+    delete_tag_in_pool(state.db.pool(), &tag_id).await
+}
 
-    // Remove item_tags associations
-    sqlx::query("DELETE FROM item_tags WHERE tag_id = ?")
-        .bind(&tag_id)
-        .execute(state.db.pool())
+/// Soft-deletes a tag and rebuilds search_documents.tags_text for every
+/// previously tagged item, in one transaction.
+pub async fn delete_tag_in_pool(pool: &sqlx::SqlitePool, tag_id: &str) -> Result<(), String> {
+    let now = UnixMs::now().as_millis();
+    let mut tx = pool.begin().await.map_err(|e| e.to_string())?;
+
+    let item_ids: Vec<(String,)> = sqlx::query_as("SELECT item_id FROM item_tags WHERE tag_id = ?")
+        .bind(tag_id)
+        .fetch_all(&mut *tx)
         .await
         .map_err(|e| e.to_string())?;
 
-    // Soft delete the tag
+    sqlx::query("DELETE FROM item_tags WHERE tag_id = ?")
+        .bind(tag_id)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| e.to_string())?;
+
     sqlx::query("UPDATE tags SET deleted_at = ?, updated_at = ? WHERE id = ?")
         .bind(now)
         .bind(now)
-        .bind(&tag_id)
-        .execute(state.db.pool())
+        .bind(tag_id)
+        .execute(&mut *tx)
         .await
         .map_err(|e| e.to_string())?;
 
+    for (item_id,) in item_ids {
+        update_tags_text_for_item_tx(&mut tx, &item_id)
+            .await
+            .map_err(|e| e.to_string())?;
+    }
+
+    tx.commit().await.map_err(|e| e.to_string())?;
     Ok(())
 }
 
@@ -238,11 +256,21 @@ async fn update_tags_text_for_item(
     pool: &sqlx::SqlitePool,
     item_id: &str,
 ) -> Result<(), sqlx::Error> {
+    let mut tx = pool.begin().await?;
+    update_tags_text_for_item_tx(&mut tx, item_id).await?;
+    tx.commit().await?;
+    Ok(())
+}
+
+async fn update_tags_text_for_item_tx(
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    item_id: &str,
+) -> Result<(), sqlx::Error> {
     let tags: Vec<(String,)> = sqlx::query_as(
         "SELECT t.name FROM tags t JOIN item_tags it ON it.tag_id = t.id WHERE it.item_id = ? AND t.deleted_at IS NULL",
     )
     .bind(item_id)
-    .fetch_all(pool)
+    .fetch_all(&mut **tx)
     .await?;
 
     let tags_text = tags
@@ -256,7 +284,7 @@ async fn update_tags_text_for_item(
         .bind(&tags_text)
         .bind(now)
         .bind(item_id)
-        .execute(pool)
+        .execute(&mut **tx)
         .await?;
 
     Ok(())

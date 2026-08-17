@@ -1249,6 +1249,7 @@ body {
 }
 .btn-sub-board:hover { border-color: var(--color-accent); }
 .btn-sub-board:disabled { opacity: 0.5; cursor: default; }
+.canvas-toolbar { display: flex; gap: 0.35rem; }
 
 /* BRD-004 breadcrumb navigation */
 .board-breadcrumb {

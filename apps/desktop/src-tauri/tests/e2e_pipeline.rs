@@ -351,4 +351,50 @@ mod tests {
         assert_eq!(asset_count_after.0, 1);
         let _ = item_b;
     }
+
+    #[tokio::test]
+    async fn batch_archive_and_trash_are_atomic() {
+        let db = setup().await;
+        let svc = CaptureService::new(db.clone(), EntityId::new());
+        let mut ids = Vec::new();
+        for text in ["one", "two", "three"] {
+            let r = svc
+                .capture_text(CaptureTextRequest {
+                    text: text.to_string(),
+                    capture_method: CaptureMethod::ManualHotkey,
+                    source_app: None,
+                    window_title: None,
+                })
+                .await
+                .expect("capture");
+            ids.push(r.item_id.to_string());
+        }
+
+        let archived =
+            pastecanvas_desktop_lib::commands::inbox::batch_archive_in_pool(db.pool(), &ids[..2])
+                .await
+                .expect("archive");
+        assert_eq!(archived, 2);
+
+        let statuses: Vec<(String,)> =
+            sqlx::query_as("SELECT inbox_status FROM items WHERE id IN (?, ?) ORDER BY created_at")
+                .bind(&ids[0])
+                .bind(&ids[1])
+                .fetch_all(db.pool())
+                .await
+                .expect("status");
+        assert!(statuses.iter().all(|(s,)| s == "archived"));
+
+        let trashed =
+            pastecanvas_desktop_lib::commands::inbox::batch_trash_in_pool(db.pool(), &ids)
+                .await
+                .expect("trash");
+        assert_eq!(trashed, 3);
+
+        let live: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM items WHERE deleted_at IS NULL")
+            .fetch_one(db.pool())
+            .await
+            .expect("live");
+        assert_eq!(live.0, 0);
+    }
 }

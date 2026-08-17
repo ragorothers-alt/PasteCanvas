@@ -3,7 +3,7 @@ import { useInbox } from "./useInbox";
 import type { GroupMode } from "./useInbox";
 import { InboxItem } from "./InboxItem";
 import { ItemDetail } from "./ItemDetail";
-import { archiveItem, batchArchive, batchTrash } from "./api";
+import { batchArchive, batchTrash, getItemContent } from "./api";
 import type { ItemSummary } from "./api";
 import { listBoards, placeItemOnBoard } from "../boards/api";
 import type { BoardSummary } from "../boards/api";
@@ -19,7 +19,34 @@ const GROUP_MODES: Array<{ value: GroupMode; label: string }> = [
   { value: "session", label: "工作階段" },
 ];
 
-export function InboxView() {
+interface InboxViewProps {
+  openItemId?: string | null;
+  onOpenItemHandled?: () => void;
+}
+
+function summaryFromContent(
+  content: Awaited<ReturnType<typeof getItemContent>>,
+): ItemSummary {
+  return {
+    id: content.itemId,
+    itemType: content.itemType,
+    title: content.title,
+    textPreview: content.plainText,
+    displayUrl: content.displayUrl,
+    inboxStatus: content.inboxStatus,
+    isFavorite: false,
+    isPinned: false,
+    captureMethod: content.captureMethod,
+    sourceApp: null,
+    domain: null,
+    captureSessionId: null,
+    createdAt: content.createdAt,
+    revision: content.revision,
+    assetByteSize: null,
+  };
+}
+
+export function InboxView({ openItemId = null, onOpenItemHandled }: InboxViewProps) {
   const {
     groups,
     groupMode,
@@ -27,10 +54,14 @@ export function InboxView() {
     items,
     state,
     error,
+    hasMore,
     reload,
+    loadMore,
     toggleFavorite,
     togglePin,
     trash,
+    archive,
+    removeLocal,
   } = useInbox();
   const [selectedItem, setSelectedItem] = useState<ItemSummary | null>(null);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
@@ -53,15 +84,16 @@ export function InboxView() {
     if (selectedIds.size === 0) return;
     setBatchBusy(true);
     try {
-      await batchArchive([...selectedIds]);
+      const ids = [...selectedIds];
+      await batchArchive(ids);
+      removeLocal(ids);
       clearSelection();
-      await reload();
     } catch (error) {
       showCaptureError(`無法封存所選項目：${String(error)}`);
     } finally {
       setBatchBusy(false);
     }
-  }, [selectedIds, reload, clearSelection]);
+  }, [selectedIds, removeLocal, clearSelection]);
 
   const handleBatchTrash = useCallback(async () => {
     if (selectedIds.size === 0) return;
@@ -104,22 +136,37 @@ export function InboxView() {
     }
   }, [batchBoardId, selectedIds, clearSelection]);
 
-  // Listen for open-item events (from dedup toast, search results) — SRC-003
-  const handleOpenItem = useCallback(
-    (e: Event) => {
-      const detail = (e as CustomEvent<{ itemId: string }>).detail;
-      const found = items.find((i) => i.id === detail.itemId);
+  const openById = useCallback(
+    async (itemId: string) => {
+      const found = items.find((i) => i.id === itemId);
       if (found) {
         setSelectedItem(found);
+        return;
+      }
+      try {
+        const content = await getItemContent(itemId);
+        setSelectedItem(summaryFromContent(content));
+      } catch (error) {
+        showCaptureError(`無法開啟項目：${String(error)}`);
       }
     },
     [items],
   );
 
+  // Listen for open-item events (from dedup toast, search results) — SRC-003
   useEffect(() => {
+    const handleOpenItem = (e: Event) => {
+      const itemId = (e as CustomEvent<{ itemId: string }>).detail?.itemId;
+      if (itemId) void openById(itemId);
+    };
     window.addEventListener("paste-canvas://open-item", handleOpenItem);
     return () => window.removeEventListener("paste-canvas://open-item", handleOpenItem);
-  }, [handleOpenItem]);
+  }, [openById]);
+
+  useEffect(() => {
+    if (!openItemId) return;
+    void openById(openItemId).finally(() => onOpenItemHandled?.());
+  }, [openItemId, openById, onOpenItemHandled]);
 
   return (
     <div className="inbox-view">
@@ -199,7 +246,10 @@ export function InboxView() {
                     onToggleFavorite={() => void toggleFavorite(item.id)}
                     onTogglePin={() => void togglePin(item.id)}
                     onTrash={() => void trash(item.id)}
-                    onArchive={() => void archiveItem(item.id).then(() => reload()).catch((error) => showCaptureError(`無法封存項目：${String(error)}`))}
+                    onArchive={() => {
+                      void archive(item.id);
+                      if (selectedItem?.id === item.id) setSelectedItem(null);
+                    }}
                     onSelect={(selected) => toggleSelected(item.id, selected)}
                     selected={selectedIds.has(item.id)}
                     onOpen={() => setSelectedItem(item)}
@@ -208,6 +258,11 @@ export function InboxView() {
               </ul>
             </section>
           ))}
+          {hasMore && (
+            <button className="btn-add-exclusion" onClick={() => void loadMore()}>
+              載入更多
+            </button>
+          )}
         </div>
       )}
 

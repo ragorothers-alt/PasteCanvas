@@ -219,6 +219,189 @@ pub mod listener {
     }
 }
 
+/// What we could read from the clipboard, in capture-priority order:
+/// files → HTML → text → image. Image is last so a Word/browser copy that
+/// also puts a bitmap preview is stored as rich text, not a screenshot.
+#[derive(Debug, Clone)]
+pub enum ClipboardPayload {
+    Empty,
+    Files(Vec<String>),
+    Html { html: String, plain: Option<String> },
+    Text(String),
+    ImagePng(Vec<u8>),
+}
+
+/// Reads the current clipboard into a single payload. Safe to call from the
+/// watcher / hotkey thread before spawning persist work.
+pub fn snapshot_clipboard(app: &tauri::AppHandle) -> ClipboardPayload {
+    use tauri_plugin_clipboard_manager::ClipboardExt;
+
+    if let Some(files) = read_hdrop_files() {
+        if !files.is_empty() {
+            return ClipboardPayload::Files(files);
+        }
+    }
+
+    let html = read_cf_html();
+    let text = app
+        .clipboard()
+        .read_text()
+        .ok()
+        .map(|t| t.trim().to_string())
+        .filter(|t| !t.is_empty());
+
+    if let Some(html) = html {
+        if !html.trim().is_empty() {
+            return ClipboardPayload::Html { html, plain: text };
+        }
+    }
+    if let Some(text) = text {
+        return ClipboardPayload::Text(text);
+    }
+
+    if let Ok(img) = app.clipboard().read_image() {
+        if img.width() > 0 && img.height() > 0 {
+            if let Ok(png) = crate::infrastructure::thumbnail::encode_png_rgba(
+                img.rgba(),
+                img.width(),
+                img.height(),
+            ) {
+                if !png.is_empty() {
+                    return ClipboardPayload::ImagePng(png);
+                }
+            }
+        }
+    }
+
+    ClipboardPayload::Empty
+}
+
+#[cfg(target_os = "windows")]
+fn read_hdrop_files() -> Option<Vec<String>> {
+    windows_clip::read_hdrop()
+}
+
+#[cfg(not(target_os = "windows"))]
+fn read_hdrop_files() -> Option<Vec<String>> {
+    None
+}
+
+#[cfg(target_os = "windows")]
+fn read_cf_html() -> Option<String> {
+    windows_clip::read_html_format()
+}
+
+#[cfg(not(target_os = "windows"))]
+fn read_cf_html() -> Option<String> {
+    None
+}
+
+#[cfg(target_os = "windows")]
+mod windows_clip {
+    use std::ffi::c_void;
+
+    type Handle = *mut c_void;
+
+    const CF_HDROP: u32 = 15;
+    const GMEM_FIXED_CHECK: u32 = 0;
+
+    unsafe extern "system" {
+        fn OpenClipboard(owner: Handle) -> i32;
+        fn CloseClipboard() -> i32;
+        fn GetClipboardData(format: u32) -> Handle;
+        fn RegisterClipboardFormatW(name: *const u16) -> u32;
+        fn GlobalLock(mem: Handle) -> *mut c_void;
+        fn GlobalUnlock(mem: Handle) -> i32;
+        fn DragQueryFileW(drop: Handle, index: u32, buf: *mut u16, size: u32) -> u32;
+    }
+
+    struct ClipboardGuard;
+    impl ClipboardGuard {
+        fn open() -> Option<Self> {
+            unsafe {
+                if OpenClipboard(std::ptr::null_mut()) != 0 {
+                    Some(Self)
+                } else {
+                    None
+                }
+            }
+        }
+    }
+    impl Drop for ClipboardGuard {
+        fn drop(&mut self) {
+            unsafe {
+                CloseClipboard();
+            }
+        }
+    }
+
+    pub fn read_hdrop() -> Option<Vec<String>> {
+        let _guard = ClipboardGuard::open()?;
+        unsafe {
+            let handle = GetClipboardData(CF_HDROP);
+            if handle.is_null() {
+                return None;
+            }
+            let count = DragQueryFileW(handle, 0xFFFF_FFFF, std::ptr::null_mut(), 0);
+            if count == 0 {
+                return None;
+            }
+            let mut paths = Vec::with_capacity(count as usize);
+            for i in 0..count {
+                let mut buf = [0u16; 1024];
+                let n = DragQueryFileW(handle, i, buf.as_mut_ptr(), buf.len() as u32);
+                if n == 0 {
+                    continue;
+                }
+                paths.push(String::from_utf16_lossy(&buf[..n as usize]));
+            }
+            if paths.is_empty() { None } else { Some(paths) }
+        }
+    }
+
+    pub fn read_html_format() -> Option<String> {
+        let _guard = ClipboardGuard::open()?;
+        unsafe {
+            let name: Vec<u16> = "HTML Format\0".encode_utf16().collect();
+            let fmt = RegisterClipboardFormatW(name.as_ptr());
+            if fmt == 0 {
+                return None;
+            }
+            let handle = GetClipboardData(fmt);
+            if handle.is_null() {
+                return None;
+            }
+            let ptr = GlobalLock(handle);
+            if ptr.is_null() {
+                return None;
+            }
+            let bytes = read_cstr_bytes(ptr as *const u8);
+            GlobalUnlock(handle);
+            let _ = GMEM_FIXED_CHECK;
+            String::from_utf8(bytes).ok().or_else(|| {
+                // Some apps put UTF-16 in CF_HTML; try lossy latin1 fallback.
+                None
+            })
+        }
+    }
+
+    fn read_cstr_bytes(ptr: *const u8) -> Vec<u8> {
+        let mut out = Vec::new();
+        unsafe {
+            let mut i = 0isize;
+            loop {
+                let b = *ptr.offset(i);
+                if b == 0 || out.len() > 2 * 1024 * 1024 {
+                    break;
+                }
+                out.push(b);
+                i += 1;
+            }
+        }
+        out
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::listener::ClipboardListenerState;

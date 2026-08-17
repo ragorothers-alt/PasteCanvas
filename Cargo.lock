@@ -2794,6 +2794,7 @@ dependencies = [
  "async-trait",
  "base64 0.22.1",
  "chrono",
+ "libsqlite3-sys",
  "pastecanvas-contracts",
  "pastecanvas-test-support",
  "png 0.17.16",

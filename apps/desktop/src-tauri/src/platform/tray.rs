@@ -3,7 +3,6 @@ use tauri::{
     menu::{Menu, MenuItem},
     tray::TrayIconBuilder,
 };
-use tauri_plugin_clipboard_manager::ClipboardExt;
 
 /// Sets up the system tray with context menu (WIN-001).
 /// Menu: Open, Quick Capture, Save Current Clipboard, Pause/Resume Session,
@@ -62,31 +61,26 @@ pub fn setup_tray(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
                 let _ = crate::platform::window_manager::toggle_always_on_top(app);
             }
             "settings" => {
-                // Show main window and ask frontend to switch to Settings view
-                if let Some(window) = app.get_webview_window("main") {
-                    let _ = window.show();
-                    let _ = window.set_focus();
-                }
-                let _ = app.emit("paste-canvas://show-settings", ());
+                let _ = crate::platform::window_manager::show_main_window(app);
+                let _ = app.emit(crate::events::SHOW_SETTINGS, ());
             }
             "pause" => {
                 tracing::info!(event = "capture_pause_toggled", source = "tray");
-                // Emit event to frontend to toggle capture pause state
-                let _ = app.emit("paste-canvas://toggle-capture-pause", ());
+                let _ = app.emit(crate::events::TOGGLE_CAPTURE_PAUSE, ());
             }
             "quit" => {
                 tracing::info!(event = "app_quit_requested", source = "tray");
-                app.exit(0);
+                let app = app.clone();
+                tauri::async_runtime::spawn(async move {
+                    finish_session_on_quit(&app).await;
+                    app.exit(0);
+                });
             }
             _ => {}
         })
         .on_tray_icon_event(|tray, event| {
             if let tauri::tray::TrayIconEvent::DoubleClick { .. } = event {
-                let app = tray.app_handle();
-                if let Some(window) = app.get_webview_window("main") {
-                    let _ = window.show();
-                    let _ = window.set_focus();
-                }
+                let _ = crate::platform::window_manager::show_main_window(tray.app_handle());
             }
         })
         .build(app)?;
@@ -94,44 +88,39 @@ pub fn setup_tray(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-/// Reads the current clipboard text and captures it into the Inbox (WIN-001).
-async fn save_clipboard_from_tray(app: AppHandle) {
-    let text = match app.clipboard().read_text() {
-        Ok(t) => t,
-        Err(e) => {
-            tracing::warn!(event = "tray_clipboard_read_failed", error = %e);
-            let _ = app.emit("paste-canvas://capture-failed", "Clipboard read failed");
-            return;
-        }
-    };
-
-    if text.trim().is_empty() {
-        let _ = app.emit("paste-canvas://capture-failed", "Clipboard is empty");
-        return;
-    }
-
+/// Ends any unfinished capture session before process exit so a restart does
+/// not show an "active" session whose watcher is not running.
+async fn finish_session_on_quit(app: &AppHandle) {
     let state = app.state::<crate::bootstrap::app_state::AppState>();
-    let svc = crate::application::capture_service::CaptureService::new(
+    let svc = crate::application::session_service::SessionService::new(
         state.db.clone(),
         state.device_id.clone(),
     );
-
-    match svc
-        .capture_text(crate::application::capture_service::CaptureTextRequest {
-            text,
-            capture_method: crate::domain::entities::item::CaptureMethod::ManualHotkey,
-            source_app: None,
-            window_title: None,
-        })
-        .await
-    {
-        Ok(result) => {
-            let _ = app.emit("paste-canvas://capture-success", result.item_id.to_string());
-            let _ = app.emit("pastecanvas:item-captured", ());
+    match svc.get_current_session().await {
+        Ok(Some(_)) => {
+            if let Err(e) = svc.finish_session().await {
+                tracing::warn!(event = "quit_finish_session_failed", error = %e);
+            }
         }
+        Ok(None) => {}
         Err(e) => {
-            tracing::error!(event = "tray_capture_failed", error = %e);
-            let _ = app.emit("paste-canvas://capture-failed", e.to_string());
+            tracing::warn!(event = "quit_session_lookup_failed", error = %e);
         }
     }
+    state.clipboard_listener.stop();
+    crate::platform::clipboard_watch::stop_clipboard_watch();
+}
+
+/// Reads the current clipboard and captures whatever format is present.
+async fn save_clipboard_from_tray(app: AppHandle) {
+    let payload = crate::platform::clipboard::snapshot_clipboard(&app);
+    crate::platform::clipboard_persist::persist_and_emit(
+        &app,
+        payload,
+        crate::domain::entities::item::CaptureMethod::ManualHotkey,
+        None,
+        None,
+        true,
+    )
+    .await;
 }

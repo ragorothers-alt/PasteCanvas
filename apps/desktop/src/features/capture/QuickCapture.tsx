@@ -39,8 +39,8 @@ export function QuickCapture() {
 
   useEffect(() => {
     const handler = () => inputRef.current?.focus();
-    window.addEventListener("pastecanvas://focus-capture", handler);
-    return () => window.removeEventListener("pastecanvas://focus-capture", handler);
+    window.addEventListener("paste-canvas://focus-capture", handler);
+    return () => window.removeEventListener("paste-canvas://focus-capture", handler);
   }, []);
 
   const handleFilesDropped = useCallback(
@@ -49,7 +49,7 @@ export function QuickCapture() {
       try {
         await captureFiles(paths, targetBoard || undefined);
         setStatus("saved");
-        window.dispatchEvent(new CustomEvent("pastecanvas:item-captured"));
+        window.dispatchEvent(new CustomEvent("paste-canvas://item-captured"));
         showCaptureSuccess(
           paths.length === 1 ? "檔案已擷取" : `已擷取 ${paths.length} 個檔案`,
         );
@@ -116,7 +116,7 @@ export function QuickCapture() {
       }
       setText("");
       setStatus("saved");
-      window.dispatchEvent(new CustomEvent("pastecanvas:item-captured"));
+      window.dispatchEvent(new CustomEvent("paste-canvas://item-captured"));
 
       if (result.isDuplicate && result.duplicateOf) {
         showDedupNotice(result.duplicateOf);

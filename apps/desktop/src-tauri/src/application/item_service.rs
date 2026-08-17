@@ -33,6 +33,8 @@ pub struct ItemSummaryDto {
     pub created_at: i64,
     /// Optimistic-concurrency token used by item edits.
     pub revision: i64,
+    /// Primary asset size when the item has one (fonts/PDFs/images).
+    pub asset_byte_size: Option<i64>,
 }
 
 #[cfg(test)]
@@ -56,6 +58,7 @@ mod tests {
             capture_session_id: None,
             created_at: 1,
             revision: 7,
+            asset_byte_size: None,
         };
 
         let json = serde_json::to_value(summary).expect("summary serializes");

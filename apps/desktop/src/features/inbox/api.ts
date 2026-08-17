@@ -24,6 +24,8 @@ export interface ItemSummary {
   createdAt: number;
   /** Optimistic-concurrency revision returned by the application layer. */
   revision: number;
+  /** Primary asset size in bytes when the item has one. */
+  assetByteSize: number | null;
 }
 
 export interface CaptureTextRequest {
@@ -118,6 +120,10 @@ export interface ItemContent {
   plainText: string | null;
   displayUrl: string | null;
   title: string | null;
+  revision: number;
+  inboxStatus: string;
+  captureMethod: string;
+  createdAt: number;
 }
 
 /** Returns full item content for copy/open-source actions (SRC-003). */

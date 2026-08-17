@@ -167,6 +167,13 @@ mod tests {
         .await
         .expect("nodes");
         assert_eq!(node_count, 1);
+
+        let (revision,): (i64,) = sqlx::query_as("SELECT board_revision FROM boards WHERE id = ?")
+            .bind(&board.id)
+            .fetch_one(db.pool())
+            .await
+            .expect("revision");
+        assert!(revision > 1, "place_on_board must bump board_revision");
     }
 
     #[tokio::test]

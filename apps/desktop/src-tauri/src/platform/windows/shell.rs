@@ -26,13 +26,34 @@ pub fn open_with_shell(target: &str) -> Result<(), String> {
         // Other schemes (javascript:, file:, custom) are rejected
         return Err("unsupported URL scheme".to_string());
     } else {
-        // Treat as file path — must exist
-        if !std::path::Path::new(target).exists() {
+        // Treat as file path — must exist, and must not be an executable /
+        // script / shortcut. ShellExecuteW "open" would otherwise launch it.
+        let path = std::path::Path::new(target);
+        if !path.exists() {
             return Err("file not found".to_string());
+        }
+        if is_blocked_executable(path) {
+            return Err("opening executable files is not allowed".to_string());
         }
     }
 
     shell_execute(target)
+}
+
+/// Extensions that ShellExecuteW "open" would run rather than reveal.
+const BLOCKED_EXECUTABLE_EXTS: &[&str] = &[
+    "exe", "bat", "cmd", "com", "cpl", "hta", "jar", "js", "jse", "lnk", "msi", "msp", "pif",
+    "ps1", "psm1", "reg", "scr", "vbe", "vbs", "wsf", "wsh",
+];
+
+fn is_blocked_executable(path: &std::path::Path) -> bool {
+    path.extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|ext| {
+            BLOCKED_EXECUTABLE_EXTS
+                .iter()
+                .any(|blocked| ext.eq_ignore_ascii_case(blocked))
+        })
 }
 
 #[cfg(target_os = "windows")]
@@ -111,5 +132,21 @@ mod tests {
     #[test]
     fn rejects_nonexistent_file() {
         assert!(open_with_shell("C:\\definitely\\not\\a\\real\\file_xyz.txt").is_err());
+    }
+
+    #[test]
+    fn rejects_executable_extensions() {
+        let dir = std::env::temp_dir().join(format!("pc-shell-{}", uuid::Uuid::now_v7()));
+        std::fs::create_dir_all(&dir).expect("tmpdir");
+        for ext in ["exe", "bat", "ps1", "lnk", "cmd"] {
+            let path = dir.join(format!("payload.{ext}"));
+            std::fs::write(&path, b"not really executable").expect("write");
+            let err = open_with_shell(path.to_str().unwrap()).unwrap_err();
+            assert!(
+                err.contains("executable"),
+                "expected executable rejection for .{ext}, got {err}"
+            );
+        }
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
