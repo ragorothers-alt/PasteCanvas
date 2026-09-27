@@ -8,6 +8,14 @@ import { queryTrash, restoreItem, getTrashStats, emptyTrash } from "./api";
 import type { ItemSummary, TrashStats } from "./api";
 import { InboxItem } from "./InboxItem";
 import { toggleFavorite, togglePin } from "./api";
+import {
+  listTrashedBoards,
+  listTrashedFolders,
+  restoreBoard,
+  restoreFolder,
+  BOARDS_CHANGED_EVENT,
+} from "../boards/api";
+import type { TrashedEntry } from "../boards/api";
 import { ArrowCounterClockwise, Trash } from "@phosphor-icons/react";
 
 function formatBytes(bytes: number): string {
@@ -19,6 +27,8 @@ function formatBytes(bytes: number): string {
 export function TrashView() {
   const [items, setItems] = useState<ItemSummary[]>([]);
   const [stats, setStats] = useState<TrashStats | null>(null);
+  const [trashedBoards, setTrashedBoards] = useState<TrashedEntry[]>([]);
+  const [trashedFolders, setTrashedFolders] = useState<TrashedEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [confirming, setConfirming] = useState(false);
   const [emptying, setEmptying] = useState(false);
@@ -27,9 +37,16 @@ export function TrashView() {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const [trashItems, trashStats] = await Promise.all([queryTrash(), getTrashStats()]);
+      const [trashItems, trashStats, boards, folders] = await Promise.all([
+        queryTrash(),
+        getTrashStats(),
+        listTrashedBoards().catch(() => [] as TrashedEntry[]),
+        listTrashedFolders().catch(() => [] as TrashedEntry[]),
+      ]);
       setItems(trashItems);
       setStats(trashStats);
+      setTrashedBoards(boards);
+      setTrashedFolders(folders);
     } catch {
       // ignore
     } finally {
@@ -40,6 +57,36 @@ export function TrashView() {
   useEffect(() => {
     void load();
   }, [load]);
+
+  const notifyBoardsChanged = useCallback(() => {
+    window.dispatchEvent(new Event(BOARDS_CHANGED_EVENT));
+  }, []);
+
+  const handleRestoreBoard = useCallback(
+    async (boardId: string) => {
+      try {
+        await restoreBoard(boardId);
+        setTrashedBoards((prev) => prev.filter((b) => b.id !== boardId));
+        notifyBoardsChanged();
+      } catch {
+        // ignore
+      }
+    },
+    [notifyBoardsChanged],
+  );
+
+  const handleRestoreFolder = useCallback(
+    async (folderId: string) => {
+      try {
+        await restoreFolder(folderId);
+        setTrashedFolders((prev) => prev.filter((f) => f.id !== folderId));
+        notifyBoardsChanged();
+      } catch {
+        // ignore
+      }
+    },
+    [notifyBoardsChanged],
+  );
 
   const handleRestore = useCallback(
     async (itemId: string) => {
@@ -122,14 +169,49 @@ export function TrashView() {
 
       {loading && <div className="inbox-loading">載入中…</div>}
 
-      {!loading && items.length === 0 && (
+      {!loading && (trashedBoards.length > 0 || trashedFolders.length > 0) && (
+        <section className="trash-boards-section">
+          <h3 className="trash-section-title">看板與資料夾</h3>
+          <ul className="trash-boards-list">
+            {trashedFolders.map((f) => (
+              <li key={`folder-${f.id}`} className="trash-board-row">
+                <span className="trash-board-name">📁 {f.name}</span>
+                <button
+                  className="btn-restore"
+                  onClick={() => void handleRestoreFolder(f.id)}
+                  title="還原資料夾"
+                  aria-label={`還原資料夾 ${f.name}`}
+                >
+                  <ArrowCounterClockwise aria-hidden="true" /> 還原
+                </button>
+              </li>
+            ))}
+            {trashedBoards.map((b) => (
+              <li key={`board-${b.id}`} className="trash-board-row">
+                <span className="trash-board-name">📋 {b.name}</span>
+                <button
+                  className="btn-restore"
+                  onClick={() => void handleRestoreBoard(b.id)}
+                  title="還原看板"
+                  aria-label={`還原看板 ${b.name}`}
+                >
+                  <ArrowCounterClockwise aria-hidden="true" /> 還原
+                </button>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+
+      {!loading && items.length === 0 && trashedBoards.length === 0 && trashedFolders.length === 0 && (
         <div className="inbox-empty">
-          <p>垃圾桶是空的。</p>
+          <p className="empty-title">垃圾桶是空的</p>
+          <p className="hint">刪除的項目會在這裡保留 30 天，期間可隨時還原。</p>
         </div>
       )}
 
       {!loading && items.length > 0 && (
-        <ul className="inbox-list">
+        <div className="trash-list">
           {items.map((item) => (
             <div key={item.id} className="trash-item-row">
               <InboxItem
@@ -142,12 +224,13 @@ export function TrashView() {
                 className="btn-restore"
                 onClick={() => void handleRestore(item.id)}
                 title="還原到收件匣"
+                aria-label={`還原「${item.title ?? item.textPreview ?? "未命名項目"}」到收件匣`}
               >
                 <ArrowCounterClockwise aria-hidden="true" /> 還原
               </button>
             </div>
           ))}
-        </ul>
+        </div>
       )}
     </div>
   );

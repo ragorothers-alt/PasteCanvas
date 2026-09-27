@@ -347,10 +347,21 @@ body {
 }
 .trash-item-row {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 0.5rem;
+  list-style: none;
 }
 .trash-item-row .inbox-item { flex: 1; }
+/* Trash list uses the same card grid as inbox; each row pairs a card
+   with its restore button. */
+.trash-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  max-width: 1080px;
+  margin-inline: auto;
+}
+.trash-list .btn-restore { flex: 0 0 auto; margin-top: 0.75rem; }
 .btn-restore {
   background: none;
   border: 1px solid var(--color-border);

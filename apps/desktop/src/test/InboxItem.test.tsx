@@ -123,7 +123,7 @@ describe("InboxItem", () => {
   it("opens a labelled board picker menu", async () => {
     const { listBoards } = await import("../features/boards/api");
     vi.mocked(listBoards).mockResolvedValueOnce([
-      { id: "b1", name: "看板一", nodeCount: 0, isFavorite: false, updatedAt: 0 },
+      { id: "b1", folderId: null, name: "看板一", description: null, isFavorite: false, sortKey: "a", nodeCount: 0, viewportX: 0, viewportY: 0, viewportZoom: 1, createdAt: 0, updatedAt: 0 },
     ]);
     render(
       <InboxItem
@@ -141,7 +141,7 @@ describe("InboxItem", () => {
   it("shows success state after adding to board", async () => {
     const { listBoards, placeItemOnBoard } = await import("../features/boards/api");
     vi.mocked(listBoards).mockResolvedValueOnce([
-      { id: "b1", name: "看板一", nodeCount: 0, isFavorite: false, updatedAt: 0 },
+      { id: "b1", folderId: null, name: "看板一", description: null, isFavorite: false, sortKey: "a", nodeCount: 0, viewportX: 0, viewportY: 0, viewportZoom: 1, createdAt: 0, updatedAt: 0 },
     ]);
     vi.mocked(placeItemOnBoard).mockResolvedValueOnce("node-1");
     render(
