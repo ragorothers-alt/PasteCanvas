@@ -119,4 +119,41 @@ describe("InboxItem", () => {
     );
     expect(screen.getByText("（未命名）")).toBeDefined();
   });
+
+  it("opens a labelled board picker menu", async () => {
+    const { listBoards } = await import("../features/boards/api");
+    vi.mocked(listBoards).mockResolvedValueOnce([
+      { id: "b1", name: "看板一", nodeCount: 0, isFavorite: false, updatedAt: 0 },
+    ]);
+    render(
+      <InboxItem
+        item={mockItem}
+        onToggleFavorite={vi.fn()}
+        onTogglePin={vi.fn()}
+        onTrash={vi.fn()}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "加入看板" }));
+    expect(await screen.findByRole("menu", { name: "選擇目標看板" })).toBeDefined();
+    expect(screen.getByRole("menuitem", { name: "看板一" })).toBeDefined();
+  });
+
+  it("shows success state after adding to board", async () => {
+    const { listBoards, placeItemOnBoard } = await import("../features/boards/api");
+    vi.mocked(listBoards).mockResolvedValueOnce([
+      { id: "b1", name: "看板一", nodeCount: 0, isFavorite: false, updatedAt: 0 },
+    ]);
+    vi.mocked(placeItemOnBoard).mockResolvedValueOnce("node-1");
+    render(
+      <InboxItem
+        item={mockItem}
+        onToggleFavorite={vi.fn()}
+        onTogglePin={vi.fn()}
+        onTrash={vi.fn()}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "加入看板" }));
+    fireEvent.click(await screen.findByRole("menuitem", { name: "看板一" }));
+    expect(await screen.findByRole("button", { name: "已加入看板" })).toBeDefined();
+  });
 });

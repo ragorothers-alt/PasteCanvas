@@ -1,10 +1,11 @@
-import { memo, useState } from "react";
+import { memo, useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { Archive, Check, ClipboardText, File, FileCode, FilePdf, Image, MapPin, PushPin, Star, Trash } from "@phosphor-icons/react";
 import type { ItemSummary } from "./api";
 import { listBoards, placeItemOnBoard } from "../boards/api";
 import type { BoardSummary } from "../boards/api";
 import { setInboxItemDragPayload } from "./dragPayload";
+import { showCaptureError } from "../../stores/toastStore";
 import { ColorCard } from "./ColorCard";
 import { PdfCard } from "./PdfCard";
 import { FontCard } from "./FontCard";
@@ -66,6 +67,26 @@ export const InboxItem = memo(function InboxItem({
   const [showBoardPicker, setShowBoardPicker] = useState(false);
   const [boards, setBoards] = useState<BoardSummary[]>([]);
   const [added, setAdded] = useState(false);
+  const pickerRef = useRef<HTMLDivElement | null>(null);
+
+  // Dismiss the picker on Escape / outside click (keyboard + pointer parity).
+  useEffect(() => {
+    if (!showBoardPicker) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setShowBoardPicker(false);
+    };
+    const onPointer = (e: PointerEvent) => {
+      if (pickerRef.current && !pickerRef.current.contains(e.target as Node)) {
+        setShowBoardPicker(false);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    window.addEventListener("pointerdown", onPointer);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      window.removeEventListener("pointerdown", onPointer);
+    };
+  }, [showBoardPicker]);
 
   const handleAddToBoard = async () => {
     if (!showBoardPicker) {
@@ -79,13 +100,17 @@ export const InboxItem = memo(function InboxItem({
     }
   };
 
-  const handleSelectBoard = async (boardId: string) => {
+  const handleSelectBoard = async (boardId: string, index: number) => {
     try {
-      await placeItemOnBoard(boardId, item.id, 100 + Math.random() * 200, 100 + Math.random() * 200);
+      // Deterministic grid slot (matches InboxView batch placement) instead
+      // of a random scatter — repeated placements stay predictable.
+      await placeItemOnBoard(boardId, item.id, 100 + (index % 4) * 220, 100 + Math.floor(index / 4) * 170);
       setAdded(true);
       setShowBoardPicker(false);
       setTimeout(() => setAdded(false), 2000);
-    } catch { /* ignore */ }
+    } catch (error) {
+      showCaptureError(`無法加入看板：${String(error)}`);
+    }
   };
 
   return (
@@ -172,13 +197,15 @@ export const InboxItem = memo(function InboxItem({
       </div>
 
       {showBoardPicker && boards.length > 0 && (
-        <div className="board-picker">
+        <div className="board-picker" ref={pickerRef} role="menu" aria-label="選擇目標看板">
           <div className="board-picker-title">加入看板：</div>
-          {boards.map((b) => (
+          {boards.map((b, index) => (
             <button
               key={b.id}
+              type="button"
+              role="menuitem"
               className="board-picker-item"
-              onClick={() => void handleSelectBoard(b.id)}
+              onClick={() => void handleSelectBoard(b.id, index)}
             >
               {b.name}
             </button>
