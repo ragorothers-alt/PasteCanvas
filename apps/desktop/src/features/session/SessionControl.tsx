@@ -1,7 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
 import { getSession, startSession, pauseSession, resumeSession, finishSession } from "./api";
 import type { SessionInfo } from "./api";
-import { isTauri } from "../../lib/runtime";
 import { showSuspendNotice } from "../../stores/toastStore";
 import { TOGGLE_CAPTURE_PAUSE_EVENT, toggleCapturePause } from "./sessionToggle";
 import { Pause, Play, Stop, Circle } from "@phosphor-icons/react";
@@ -27,29 +26,15 @@ export function SessionControl() {
 
   // WIN-004: backend pauses capture sessions when the system sleeps;
   // reflect it immediately and tell the user capture did NOT auto-resume.
+  // Listens on the unified window bridge (tauriEvents) instead of a direct
+  // Tauri listen — single channel for all backend events (DP6).
   useEffect(() => {
-    if (!isTauri()) return;
-    let disposed = false;
-    let unlisten: (() => void) | null = null;
-    import("@tauri-apps/api/event")
-      .then(({ listen }) =>
-        listen<number>("paste-canvas://session-suspended", () => {
-          void refresh();
-          showSuspendNotice("系統休眠，擷取工作階段已暫停。準備好後請手動恢復。");
-        }),
-      )
-      .then((u) => {
-        if (disposed) {
-          u();
-        } else {
-          unlisten = u;
-        }
-      })
-      .catch(() => { /* browser-only render */ });
-    return () => {
-      disposed = true;
-      if (unlisten) unlisten();
+    const handler = () => {
+      void refresh();
+      showSuspendNotice("系統休眠，擷取工作階段已暫停。準備好後請手動恢復。");
     };
+    window.addEventListener("paste-canvas://session-suspended", handler);
+    return () => window.removeEventListener("paste-canvas://session-suspended", handler);
   }, [refresh]);
 
   const handleStart = useCallback(async () => {
@@ -102,25 +87,28 @@ export function SessionControl() {
 
   return (
     <div className={`session-control session-${session.state}`}>
-      <div className="session-indicator">
-        <span className={`session-dot ${session.state}`} />
+      <div className="session-indicator" role="status" aria-live="polite">
+        <span className={`session-dot ${session.state}`} aria-hidden="true" />
         <span className="session-label">
-          {session.state === "active" ? "擷取中" : "已暫停"}
-          {session.itemCount > 0 && ` (${session.itemCount})`}
+          {session.state === "active"
+            ? `擷取中${session.itemCount > 0 ? ` · 已收集 ${session.itemCount} 個項目` : ""}`
+            : session.state === "paused"
+              ? "已暫停"
+              : "已結束"}
         </span>
       </div>
       <div className="session-actions">
         {session.state === "active" && (
-          <button className="btn-session-pause" onClick={() => void handlePause()} aria-label="暫停擷取">
+          <button className="btn-session-pause" onClick={() => void handlePause()} title="暫停擷取" aria-label="暫停擷取">
             <Pause aria-hidden="true" />
           </button>
         )}
         {session.state === "paused" && (
-          <button className="btn-session-resume" onClick={() => void handleResume()} aria-label="恢復擷取">
+          <button className="btn-session-resume" onClick={() => void handleResume()} title="恢復擷取" aria-label="恢復擷取">
             <Play aria-hidden="true" />
           </button>
         )}
-        <button className="btn-session-stop" onClick={() => void handleFinish()} aria-label="結束工作階段">
+        <button className="btn-session-stop" onClick={() => void handleFinish()} title="結束工作階段" aria-label="結束工作階段">
             <Stop aria-hidden="true" />
         </button>
       </div>
