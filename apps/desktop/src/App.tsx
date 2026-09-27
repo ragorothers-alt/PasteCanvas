@@ -1,13 +1,22 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo, lazy, Suspense } from "react";
 import type { ReactNode } from "react";
 import { InboxView } from "./features/inbox/InboxView";
-import { TrashView } from "./features/inbox/TrashView";
 import { QuickCapture } from "./features/capture/QuickCapture";
 import { ToastContainer } from "./features/capture/Toast";
 import { SearchBar } from "./features/search/SearchBar";
-import { BoardView } from "./features/boards/BoardView";
-import { SettingsView } from "./features/settings/SettingsView";
 import { SessionControl } from "./features/session/SessionControl";
+
+// Workspace views are code-split: ReactFlow (@xyflow, ~300KB) ships only when
+// a board is opened; Settings/Trash chunks load on navigation.
+const BoardView = lazy(() =>
+  import("./features/boards/BoardView").then((m) => ({ default: m.BoardView })),
+);
+const SettingsView = lazy(() =>
+  import("./features/settings/SettingsView").then((m) => ({ default: m.SettingsView })),
+);
+const TrashView = lazy(() =>
+  import("./features/inbox/TrashView").then((m) => ({ default: m.TrashView })),
+);
 import {
   listBoards,
   createBoard,
@@ -101,6 +110,13 @@ export function App() {
   }, []);
 
   useEffect(() => { void loadRecent(); }, [loadRecent]);
+
+  // Board/folder restore (Trash view) notifies the sidebar to refresh.
+  useEffect(() => {
+    const handler = () => void loadBoards();
+    window.addEventListener("paste-canvas://boards-changed", handler);
+    return () => window.removeEventListener("paste-canvas://boards-changed", handler);
+  }, [loadBoards]);
 
   // WIN-001: tray "Settings" emits this event to switch the view
   useEffect(() => {
@@ -343,7 +359,19 @@ export function App() {
           onClick={(e) => e.stopPropagation()}
         />
       ) : (
-        <span className="nav-board-name" onClick={() => handleSelectBoard(b)}>
+        <span
+          className="nav-board-name"
+          role="button"
+          tabIndex={0}
+          aria-label={`開啟看板 ${b.name}`}
+          onClick={() => handleSelectBoard(b)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" || e.key === " ") {
+              e.preventDefault();
+              handleSelectBoard(b);
+            }
+          }}
+        >
           {b.name}
         </span>
       )}
@@ -351,7 +379,7 @@ export function App() {
         <button
           className={`btn-board-fav ${b.isFavorite ? "fav" : ""}`}
           title={b.isFavorite ? "取消收藏看板" : "收藏看板"}
-          aria-label={b.isFavorite ? "取消收藏看板" : "收藏看板"}
+          aria-label={(b.isFavorite ? "取消收藏看板 " : "收藏看板 ") + b.name}
           onClick={(e) => {
             e.stopPropagation();
             void handleToggleFavorite(b.id);
@@ -362,6 +390,7 @@ export function App() {
         <button
           className="btn-folder-rename"
           title="重新命名看板"
+          aria-label={`重新命名看板 ${b.name}`}
           onClick={(e) => {
             e.stopPropagation();
             setEditingBoardId(b.id);
@@ -373,6 +402,7 @@ export function App() {
         <button
           className="btn-folder-trash"
           title="刪除看板"
+          aria-label={`刪除看板 ${b.name}`}
           onClick={(e) => {
             e.stopPropagation();
             void handleTrashBoard(b.id);
@@ -445,6 +475,7 @@ export function App() {
             <button
               className="btn-folder-rename"
               title="重新命名資料夾"
+              aria-label={`重新命名資料夾 ${folder.name}`}
               onClick={() => {
                 setEditingFolderId(folder.id);
                 setEditingFolderName(folder.name);
@@ -455,6 +486,7 @@ export function App() {
             <button
               className="btn-folder-trash"
               title="刪除資料夾（保留看板）"
+              aria-label={`刪除資料夾 ${folder.name}（保留看板）`}
               onClick={() => void handleTrashFolder(folder.id)}
             >
               <Trash aria-hidden="true" />
@@ -468,7 +500,7 @@ export function App() {
     return out;
   };
 
-  const tree = buildBoardTree(folders, boards);
+  const tree = useMemo(() => buildBoardTree(folders, boards), [folders, boards]);
 
   return (
     <main className="app-root">
@@ -487,10 +519,17 @@ export function App() {
           >
             <Note className="nav-glyph" aria-hidden="true" /><span>收件匣</span>
           </button>
-          <button type="button" className={`nav-item ${view === "inbox" ? "" : ""}`} onClick={() => {
-            setView("inbox");
-            window.dispatchEvent(new CustomEvent("paste-canvas://search-command", { detail: { query: "favorite:true" } }));
-          }} title="顯示收藏項目">
+          <button
+            type="button"
+            className="nav-item"
+            aria-pressed="false"
+            onClick={() => {
+              setView("inbox");
+              window.dispatchEvent(new CustomEvent("paste-canvas://search-command", { detail: { query: "favorite:true" } }));
+            }}
+            title="顯示收藏項目"
+            aria-label="顯示收藏項目"
+          >
             <Star className="nav-glyph" aria-hidden="true" /><span>收藏</span>
           </button>
           <button type="button" aria-label="搜尋" className="nav-item nav-search-link" onClick={() => {
@@ -601,15 +640,25 @@ export function App() {
                 ))}
               </nav>
             )}
-            <BoardView
-              key={activeBoard.id}
-              board={activeBoard}
-              onEnterBoard={(id) => void handleEnterBoard(id)}
-            />
+            <Suspense fallback={<div className="detail-loading">載入中…</div>}>
+              <BoardView
+                key={activeBoard.id}
+                board={activeBoard}
+                onEnterBoard={(id) => void handleEnterBoard(id)}
+              />
+            </Suspense>
           </>
         )}
-        {view === "settings" && <SettingsView theme={theme} onThemeChange={handleThemeChange} />}
-        {view === "trash" && <TrashView />}
+        {view === "settings" && (
+          <Suspense fallback={<div className="detail-loading">載入中…</div>}>
+            <SettingsView theme={theme} onThemeChange={handleThemeChange} />
+          </Suspense>
+        )}
+        {view === "trash" && (
+          <Suspense fallback={<div className="detail-loading">載入中…</div>}>
+            <TrashView />
+          </Suspense>
+        )}
       </div>
 
       <ToastContainer />

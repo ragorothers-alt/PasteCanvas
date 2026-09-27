@@ -109,6 +109,20 @@ body {
   margin-top: 0.5rem;
 }
 
+/* Keyboard hints under the capture composer (both floating + inline). */
+.capture-footnote {
+  margin-top: 0.5rem;
+  font-size: 0.75rem;
+  color: var(--color-text-muted);
+}
+.capture-footnote kbd {
+  background: var(--color-surface-raised);
+  padding: 0.1rem 0.35rem;
+  border-radius: 4px;
+  border: 1px solid var(--color-border);
+  font-size: 0.72rem;
+}
+
 .btn-capture {
   background: var(--color-accent);
   color: #fff;
@@ -349,6 +363,40 @@ body {
 }
 .btn-restore:hover { color: var(--color-text); border-color: var(--color-accent); }
 
+/* Trashed boards/folders restore section */
+.trash-boards-section {
+  margin-bottom: 1.25rem;
+}
+.trash-section-title {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--color-text-muted);
+  margin: 0 0 0.5rem;
+}
+.trash-boards-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+.trash-board-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.4rem 0.6rem;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+}
+.trash-board-name {
+  flex: 1;
+  font-size: 0.85rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 /* DAT-003 empty-trash confirmation dialog */
 .trash-confirm-overlay {
   position: fixed;
@@ -454,6 +502,15 @@ body {
   color: var(--color-text-muted);
   font-size: 0.8rem;
   padding: 0.5rem;
+}
+
+/* Result count live region above the result rows. */
+.search-result-count {
+  font-size: 0.72rem;
+  color: var(--color-text-muted);
+  padding: 0.35rem 0.5rem;
+  border-bottom: 1px solid var(--color-border);
+  margin-bottom: 0.25rem;
 }
 
 .search-result-item {
@@ -1063,6 +1120,72 @@ body {
 .tag-dropdown-item:hover { background: var(--color-surface-glass); }
 .tag-count { font-size: 0.65rem; color: var(--color-text-muted); }
 
+/* Tag management (rename/delete) inside the dropdown */
+.tag-manage-row { align-items: center; gap: 0.4rem; }
+.tag-dropdown-pick {
+  flex: 1;
+  display: flex;
+  justify-content: space-between;
+  gap: 0.4rem;
+  background: none;
+  border: none;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+  padding: 0;
+  text-align: left;
+}
+.tag-manage-actions { display: flex; gap: 0.15rem; opacity: 0; transition: opacity 0.12s; }
+.tag-dropdown-item:hover .tag-manage-actions,
+.tag-manage-actions:focus-within { opacity: 1; }
+/* Touch / coarse-pointer: hover-only actions are unreachable — always show. */
+@media (hover: none), (pointer: coarse) {
+  .tag-manage-actions { opacity: 1; }
+}
+
+/* Inbox selection state (InboxItem renders .is-selected; previously unstyled). */
+.inbox-item.is-selected {
+  border-color: var(--color-accent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-accent) 30%, transparent), var(--shadow-soft);
+}
+.inbox-item.is-selected:hover { border-color: var(--color-accent); }
+
+/* Search loading indicator (SearchBar renders .search-spinner; previously unstyled). */
+.search-spinner {
+  flex: 0 0 auto;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  border: 2px solid var(--color-border);
+  border-top-color: var(--color-accent);
+  animation: search-spin 0.8s linear infinite;
+  color: transparent;
+  font-size: 0;
+  line-height: 0;
+}
+@keyframes search-spin { to { transform: rotate(360deg); } }
+.tag-action {
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 0.7rem;
+  color: var(--color-text-muted);
+  padding: 0.1rem 0.25rem;
+  border-radius: 4px;
+}
+.tag-action:hover { color: var(--color-text); background: var(--color-border); }
+.tag-action-danger:hover { color: #d5484f; }
+.tag-rename-row { align-items: center; gap: 0.4rem; }
+.tag-rename-input {
+  flex: 1;
+  background: var(--color-surface);
+  border: 1px solid var(--color-accent);
+  border-radius: 4px;
+  color: var(--color-text);
+  font-size: 0.8rem;
+  padding: 0.2rem 0.4rem;
+}
+
 /* Color Card */
 .color-card { display: flex; align-items: center; gap: 0.6rem; padding: 0.4rem 0; }
 .color-swatch {
@@ -1365,6 +1488,36 @@ body { background: var(--color-bg); color: var(--color-text); }
 .group-mode-btn { border-radius: 7px; color: var(--color-text-muted); }
 .group-mode-btn.active { background: var(--color-text); color: var(--color-bg); }
 .inbox-groups, .batch-action-bar { max-width: 1080px; margin-inline: auto; }
+
+/* Batch action bar (InboxView renders it when items are selected). */
+.batch-action-bar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-bottom: 1rem;
+  padding: 0.6rem 0.75rem;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-soft);
+  font-size: 0.8rem;
+}
+.batch-action-bar strong { margin-right: 0.25rem; }
+.batch-action-bar button,
+.batch-action-bar select {
+  min-height: 32px;
+  padding: 0.3rem 0.7rem;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-raised);
+  color: var(--color-text);
+  font-size: 0.8rem;
+  cursor: pointer;
+}
+.batch-action-bar button:hover:not(:disabled) { border-color: var(--color-accent); color: var(--color-accent); }
+.batch-action-bar button:disabled { opacity: 0.5; cursor: default; }
+.batch-action-bar .batch-clear { margin-left: auto; background: transparent; }
 .group-label { color: var(--color-text-muted); font-size: .72rem; letter-spacing: .08em; text-transform: uppercase; }
 .inbox-list { display: grid; gap: 9px; }
 .inbox-item { position: relative; border-radius: 12px; padding: 15px 16px; background: var(--color-surface); border-color: var(--color-border); box-shadow: var(--shadow-soft); }
@@ -1438,7 +1591,10 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   .nav-item { justify-content: center; padding-inline: 4px; }
   .nav-glyph { width: auto; font-size: 1rem; }
   .nav-section { margin-top: 8px; }
-  .nav-recent, .nav-section:not(.nav-recent) { display: none; }
+  /* 640px icon rail: hide Recent to save space, but keep the board tree
+     reachable (scrollable) instead of display:none — otherwise mobile
+     users cannot switch or create boards. */
+  .nav-recent { display: none; }
   .command-bar { min-height: 58px; padding: 8px; }
   .command-bar .search-input { font-size: .75rem; }
   .command-capture { font-size: 0; min-width: 36px; padding: 0; }
@@ -1466,7 +1622,8 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .command-context { gap: 9px; min-width: 150px; }
 .command-status { gap: 7px; white-space: nowrap; }
 .command-capture { gap: 5px; justify-content: center; }
-.sidebar-nav { display: flex; flex-direction: column; min-height: 0; }
+.sidebar-nav { display: flex; flex-direction: column; min-height: 0; flex: 1; overflow-y: auto; }
+.sidebar { overflow: hidden; }
 .sidebar .nav-item,
 .sidebar .nav-board,
 .sidebar .nav-folder { display: flex; align-items: center; gap: 9px; width: 100%; text-align: left; }
@@ -1474,11 +1631,15 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .nav-section-actions { display: inline-flex; align-items: center; gap: 4px; }
 
 /* Search filters are a surfaced popover only when the command search is in
-   use. Results move below it so chips never cover result rows. */
+   use. Results move below it so chips never cover result rows. When a
+   filter is active the chip row stays visible (see .has-active-filter)
+   so the result list never appears filtered without explanation. */
 .command-bar .search-filters { display: none; top: 48px; left: 0; right: 0; padding: 7px; border: 1px solid var(--color-border); border-radius: 10px; background: var(--color-surface); box-shadow: var(--shadow-panel); }
-.command-bar .search-container:focus-within .search-filters { display: flex; }
+.command-bar .search-container:focus-within .search-filters,
+.command-bar .search-container.has-active-filter .search-filters { display: flex; }
 .command-bar .search-results { top: 48px; }
-.command-bar .search-container:focus-within .search-results { top: 91px; }
+.command-bar .search-container:focus-within .search-results,
+.command-bar .search-container.has-active-filter .search-results { top: 91px; }
 .group-mode-btn.active { background: color-mix(in srgb, var(--color-accent) 14%, transparent); color: var(--color-accent); border: 1px solid color-mix(in srgb, var(--color-accent) 26%, transparent); }
 
 @media (max-width: 640px) {
@@ -1542,13 +1703,18 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .inline-quick-capture .quick-capture { padding: 0; border: 0; }
 .inline-quick-capture .capture-input { min-height: 56px; max-height: 100px; }
 .inbox-item .item-title-button { padding: 0; border: 0; background: transparent; color: var(--color-text); text-align: left; }
-.inbox-item .item-actions button { min-width: 30px; min-height: 30px; padding: 5px; border: 1px solid transparent; background: transparent; color: var(--color-text-muted); }
-.inbox-item .item-actions button:hover { border-color: var(--color-border); background: var(--color-surface-raised); color: var(--color-accent); }
-.inbox-item .item-actions .btn-archive { font-size: 0; }
-.inbox-item .item-actions .btn-archive svg { width: 16px; height: 16px; }
-.inbox-list { grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); align-items: stretch; gap: 14px; }
-.inbox-item { min-height: 220px; flex-direction: column; align-items: stretch; gap: 10px; }
-.inbox-item .item-select { position: absolute; top: 14px; left: 14px; z-index: 2; margin: 0; }
+.inbox-item .item-actions button { min-width: 30px; min-height: 30px; padding: 5px; border: 1px solid transparent; background: transparent; color: var(--color-text-muted); opacity: 0.85; }
+.inbox-item .item-actions button:hover { border-color: var(--color-border); background: var(--color-surface-raised); color: var(--color-accent); opacity: 1; }
+.inbox-item .item-actions .btn-archive svg { width: 16px; height: 16px; flex: 0 0 auto; }
+/* Card density: no forced min-height — text/link/code cards size to content
+   instead of stretching to 220px of blank space; auto-fill keeps single
+   items at column width instead of full-width stretch. */
+.inbox-list { grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); align-items: start; gap: 14px; }
+.inbox-item { flex-direction: column; align-items: stretch; gap: 10px; }
+/* Selection checkbox: enlarged hit area + accent color; the icon shifts
+   right only when a checkbox is present so the two never overlap. */
+.inbox-item .item-select { position: absolute; top: 16px; left: 16px; z-index: 2; margin: 0; width: 18px; height: 18px; accent-color: var(--color-accent); cursor: pointer; }
+.inbox-item:has(.item-select) .item-icon { margin-left: 28px; }
 .inbox-item .item-icon { display: flex; align-items: center; justify-content: center; width: 34px; height: 34px; margin-top: 0; border-radius: 9px; font-size: 1.1rem; }
 .inbox-item .item-content { display: flex; flex-direction: column; gap: 9px; width: 100%; }
 .inbox-item .item-content .image-preview { order: -1; width: 100%; margin: 0; }
@@ -1559,6 +1725,19 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .inbox-item .item-meta { flex-wrap: wrap; margin-top: auto; }
 .inbox-item .item-actions { justify-content: flex-end; margin-top: auto; }
 .pdf-icon svg, .card-icon svg { width: 1em; height: 1em; }
+
+/* Screen-reader-only text: visually hidden but announced by AT. */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
 
 @media (max-width: 760px) {
   .settings-layout { display: block; }

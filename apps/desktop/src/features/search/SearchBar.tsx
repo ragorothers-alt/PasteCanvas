@@ -10,7 +10,7 @@ import {
   locateItemBoards,
   navigateToBoard,
 } from "./searchActions";
-import { showCaptureSuccess } from "../../stores/toastStore";
+import { showCaptureError, showCaptureInfo, showCaptureSuccess } from "../../stores/toastStore";
 import { ArrowSquareOut, Copy, MapPin, MagnifyingGlass, Star } from "@phosphor-icons/react";
 
 const TYPE_FILTERS = ["plain_text", "link", "image", "pdf", "code"] as const;
@@ -93,29 +93,50 @@ export function SearchBar() {
     return () => window.removeEventListener("paste-canvas://search-command", handler);
   }, [doSearch]);
 
+  // Popover dismiss: Escape clears the query and closes results.
+  const handleSearchKeyDown = useCallback(
+    (e: React.KeyboardEvent) => {
+      if (e.key === "Enter") {
+        void doSearch(query, activeFilter);
+      } else if (e.key === "Escape") {
+        if (debounceRef.current) clearTimeout(debounceRef.current);
+        setQuery("");
+        setResults([]);
+        setHasSearched(false);
+        setActiveFilter(null);
+        inputRef.current?.blur();
+      }
+    },
+    [doSearch, query, activeFilter],
+  );
+
   return (
-    <div className="search-container">
+    <div className={`search-container${activeFilter ? " has-active-filter" : ""}`} data-active-filter={activeFilter ?? ""}>
       <div className="search-bar">
         <MagnifyingGlass className="search-icon" aria-hidden="true" />
         <input
           ref={inputRef}
           className="search-input"
           type="text"
+          role="combobox"
+          aria-expanded={hasSearched}
+          aria-controls="search-results-list"
+          aria-label="搜尋項目"
           placeholder="搜尋…（支援 type: source: domain: board: after: before: favorite: inbox: session:）"
           value={query}
           onChange={(e) => handleChange(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter") void doSearch(query, activeFilter);
-          }}
+          onKeyDown={handleSearchKeyDown}
         />
         {searching && <span className="search-spinner">…</span>}
       </div>
 
-      <div className="search-filters">
+      <div className="search-filters" role="group" aria-label="類型篩選">
         {TYPE_FILTERS.map((t) => (
           <button
             key={t}
+            type="button"
             className={`filter-chip ${activeFilter === t ? "active" : ""}`}
+            aria-pressed={activeFilter === t}
             onClick={() => handleFilterClick(t)}
           >
             {TYPE_LABELS[t] ?? t}
@@ -124,10 +145,10 @@ export function SearchBar() {
       </div>
 
       {hasSearched && (
-        <div className="search-results">
-          {results.length === 0 && (
-            <div className="search-empty">找不到結果。</div>
-          )}
+        <div className="search-results" id="search-results-list" role="listbox" aria-label="搜尋結果">
+          <div className="search-result-count" role="status" aria-live="polite">
+            {searching ? "搜尋中…" : results.length === 0 ? "找不到結果" : `找到 ${results.length} 筆結果`}
+          </div>
           {results.map((r) => (
             <div key={r.itemId} className="search-result-item">
               <div
@@ -158,6 +179,7 @@ export function SearchBar() {
                   onClick={() => {
                     void copyItemContent(r.itemId).then((copied) => {
                       if (copied !== null) showCaptureSuccess("已複製");
+                      else showCaptureError("複製失敗，請再試一次");
                     });
                   }}
                 >
@@ -194,7 +216,7 @@ export function SearchBar() {
                       if (boards.length > 0) {
                         navigateToBoard(boards[0]!.boardId);
                       } else {
-                        showCaptureSuccess("尚未加入任何看板");
+                        showCaptureInfo("尚未加入任何看板");
                       }
                     });
                   }}

@@ -172,9 +172,10 @@ export function QuickCapture() {
         placeholder={
           dragOver
             ? "放開檔案即可擷取…"
-            : "貼上文字、連結、圖片或檔案…"
+            : "貼上文字、連結、圖片或檔案…（Enter 儲存，Shift+Enter 換行）"
         }
         aria-label="擷取內容"
+        aria-busy={status === "saving"}
         value={text}
         onChange={(e) => setText(e.target.value)}
         onKeyDown={handleKeyDown}
@@ -210,7 +211,11 @@ export function QuickCapture() {
           </span>
         )}
       </div>
-      {isFloating && <p className="capture-footnote"><kbd>Enter</kbd> 儲存 <span aria-hidden="true">·</span> <kbd>Ctrl</kbd>/<kbd>⌘</kbd>+<kbd>Enter</kbd> 儲存並保持開啟 <span aria-hidden="true">·</span> <kbd>Esc</kbd> 關閉</p>}
+      {isFloating ? (
+        <p className="capture-footnote"><kbd>Enter</kbd> 儲存 <span aria-hidden="true">·</span> <kbd>Ctrl</kbd>/<kbd>⌘</kbd>+<kbd>Enter</kbd> 儲存並保持開啟 <span aria-hidden="true">·</span> <kbd>Esc</kbd> 關閉</p>
+      ) : (
+        <p className="capture-footnote"><kbd>Enter</kbd> 儲存 <span aria-hidden="true">·</span> <kbd>Shift</kbd>+<kbd>Enter</kbd> 換行</p>
+      )}
       </div>
     </main>
   );

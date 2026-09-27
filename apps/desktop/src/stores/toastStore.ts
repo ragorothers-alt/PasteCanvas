@@ -83,6 +83,14 @@ export function showCaptureError(message: string): void {
   useToastStore.getState().push({ message, variant: "error" });
 }
 
+/** Convenience: show a neutral informational toast. */
+export function showCaptureInfo(message: string): void {
+  useToastStore.getState().push({
+    message,
+    variant: "info",
+  });
+}
+
 /** Convenience: WIN-004 — system slept, capture session was paused. */
 export function showSuspendNotice(message: string): void {
   useToastStore.getState().push({
@@ -94,7 +102,7 @@ export function showSuspendNotice(message: string): void {
 /** Convenience: show a dedup notice with "open existing" action. */
 export function showDedupNotice(existingItemId: string): void {
   useToastStore.getState().push({
-    message: "已有相似內容",
+    message: "已有相似內容，本次未重複擷取",
     variant: "dedup",
     relatedItemId: existingItemId,
     action: {

@@ -1,6 +1,6 @@
 import { memo, useState } from "react";
 import type { ReactNode } from "react";
-import { Archive, ClipboardText, File, FileCode, FilePdf, Image, MapPin, PushPin, Star, Trash, X } from "@phosphor-icons/react";
+import { Archive, Check, ClipboardText, File, FileCode, FilePdf, Image, MapPin, PushPin, Star, Trash } from "@phosphor-icons/react";
 import type { ItemSummary } from "./api";
 import { listBoards, placeItemOnBoard } from "../boards/api";
 import type { BoardSummary } from "../boards/api";
@@ -139,10 +139,11 @@ export const InboxItem = memo(function InboxItem({
         <button
           className={`btn-add-board ${added ? "added" : ""}`}
           onClick={() => void handleAddToBoard()}
-          title="加入看板"
-          aria-label="加入看板"
+          title={added ? "已加入看板" : "加入看板"}
+          aria-label={added ? "已加入看板" : "加入看板"}
+          aria-live="polite"
         >
-          {added ? <X aria-hidden="true" /> : <ClipboardText aria-hidden="true" />}
+          {added ? <Check aria-hidden="true" /> : <ClipboardText aria-hidden="true" />}
         </button>
         <button
           className={`btn-fav ${item.isFavorite ? "active" : ""}`}
@@ -164,8 +165,8 @@ export const InboxItem = memo(function InboxItem({
           <Trash aria-hidden="true" />
         </button>
         {onArchive && (
-          <button className="btn-archive" onClick={onArchive} title="封存項目">
-            <Archive aria-hidden="true" /> 封存
+          <button className="btn-archive" onClick={onArchive} title="封存項目" aria-label="封存項目">
+            <Archive aria-hidden="true" /><span className="sr-only">封存</span>
           </button>
         )}
       </div>
