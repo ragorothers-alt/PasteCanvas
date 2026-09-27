@@ -1,12 +1,17 @@
-import { useState, useCallback, useEffect } from "react";
+import { useState, useCallback, useEffect, lazy, Suspense } from "react";
 import type { ItemSummary } from "./api";
 import { editItem, getItemContent, revealItemAsset } from "./api";
-import { CodeEditor } from "../../adapters/code/CodeEditor";
-import { detectLanguage } from "../../adapters/code/CodeMirrorAdapter";
+import { detectLanguage } from "../../adapters/code/languageDetect";
 import { TagSelector } from "../tags/TagSelector";
-import { PdfPreview } from "./PdfPreview";
 import { ImagePreview } from "./ImagePreview";
-import { ArrowSquareOut, Copy, FloppyDisk, X } from "@phosphor-icons/react";
+import { ArrowSquareOut, Copy, FloppyDisk, PencilSimple, X } from "@phosphor-icons/react";
+
+// Heavy adapters are code-split: CodeMirror (~300KB) and pdf.js (~1MB) load
+// only when a code/PDF item is actually opened.
+const CodeEditor = lazy(() =>
+  import("../../adapters/code/CodeEditor").then((m) => ({ default: m.CodeEditor })),
+);
+const PdfPreview = lazy(() => import("./PdfPreview").then((m) => ({ default: m.PdfPreview })));
 
 // Item types that have a managed asset file on disk (INB-003 reveal)
 const ASSET_TYPES = new Set(["image", "screenshot", "pdf", "font", "svg", "file"]);
@@ -96,16 +101,24 @@ export function ItemDetail({ item, onClose, onUpdated }: ItemDetailProps) {
       <div className="detail-header">
         <button className="btn-close-detail" onClick={onClose} aria-label="關閉詳細資料"><X aria-hidden="true" /></button>
         <span className="detail-type">{ITEM_TYPE_LABELS[item.itemType] ?? item.itemType}</span>
+        <span className="detail-header-spacer" aria-hidden="true" />
         {ASSET_TYPES.has(item.itemType) && (
           <button
             className="btn-reveal-asset"
             onClick={() => void handleReveal()}
             title="在檔案總管顯示資產"
+            aria-label="在檔案總管顯示資產"
           >
             <ArrowSquareOut aria-hidden="true" /> 顯示檔案
           </button>
         )}
-        <button className="btn-reveal-asset" onClick={() => void handleCopy()} title="複製內容">
+        <button
+          className="btn-copy-content"
+          onClick={() => void handleCopy()}
+          title="複製內容"
+          aria-label="複製內容"
+          aria-live="polite"
+        >
           <Copy aria-hidden="true" /> {copyMsg ?? "複製"}
         </button>
       </div>
@@ -132,30 +145,38 @@ export function ItemDetail({ item, onClose, onUpdated }: ItemDetailProps) {
             {error && <div className="detail-error">{error}</div>}
           </div>
         ) : (
-          <h3
-            className="detail-title"
-            onClick={() => setEditing(true)}
-            title="點選即可編輯標題"
-          >
-            {item.title ?? item.textPreview ?? "(未命名)"}
-          </h3>
+          <div className="detail-title-row">
+            <h3 className="detail-title">{item.title ?? item.textPreview ?? "(未命名)"}</h3>
+            <button
+              className="btn-edit-title"
+              onClick={() => setEditing(true)}
+              title="編輯標題"
+              aria-label="編輯標題"
+            >
+              <PencilSimple aria-hidden="true" />
+            </button>
+          </div>
         )}
       </div>
 
       {(fullText || item.textPreview) && item.itemType === "code" && (
         <div className="detail-content">
-          <CodeEditor
-            code={fullText ?? item.textPreview ?? ""}
-            language={detectLanguage(fullText ?? item.textPreview ?? "")}
-            editable={false}
-          />
+          <Suspense fallback={<div className="detail-loading">載入中…</div>}>
+            <CodeEditor
+              code={fullText ?? item.textPreview ?? ""}
+              language={detectLanguage(fullText ?? item.textPreview ?? "")}
+              editable={false}
+            />
+          </Suspense>
         </div>
       )}
 
       {/* PDF first-page preview (PRD P1) — mounted only in focused detail view */}
       {item.itemType === "pdf" && (
         <div className="detail-content">
-          <PdfPreview itemId={item.id} />
+          <Suspense fallback={<div className="detail-loading">載入中…</div>}>
+            <PdfPreview itemId={item.id} />
+          </Suspense>
         </div>
       )}
 

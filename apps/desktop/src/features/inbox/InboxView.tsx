@@ -1,14 +1,16 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, lazy, Suspense } from "react";
 import { useInbox } from "./useInbox";
 import type { GroupMode } from "./useInbox";
 import { InboxItem } from "./InboxItem";
-import { ItemDetail } from "./ItemDetail";
 import { batchArchive, batchTrash, getItemContent } from "./api";
 import type { ItemSummary } from "./api";
 import { listBoards, placeItemOnBoard } from "../boards/api";
 import type { BoardSummary } from "../boards/api";
 import { showCaptureError, showCaptureSuccess } from "../../stores/toastStore";
 import { ArrowClockwise } from "@phosphor-icons/react";
+
+// Detail panel (inspector + previews) loads only when an item is selected.
+const ItemDetail = lazy(() => import("./ItemDetail").then((m) => ({ default: m.ItemDetail })));
 
 /** INB-002 smart-view mode labels. */
 const GROUP_MODES: Array<{ value: GroupMode; label: string }> = [
@@ -223,10 +225,22 @@ export function InboxView({ openItemId = null, onOpenItemHandled }: InboxViewPro
 
       {state === "success" && items.length === 0 && (
         <div className="inbox-empty">
-          <p>還沒有項目。</p>
+          <p className="empty-title">收件匣是空的</p>
           <p className="hint">
-            按下 <kbd>Ctrl+Shift+V</kbd> 擷取剪貼簿內容。
+            先收集，再整理。試試以下任一方式加入第一個項目：
           </p>
+          <ul className="empty-paths">
+            <li>按下 <kbd>Ctrl+Shift+V</kbd> 擷取剪貼簿內容</li>
+            <li>把檔案拖進上方的快速擷取區</li>
+            <li>在瀏覽器用右鍵選單傳送連結或圖片</li>
+          </ul>
+          <button
+            type="button"
+            className="btn-capture"
+            onClick={() => window.dispatchEvent(new Event("paste-canvas://focus-capture"))}
+          >
+            開始擷取
+          </button>
         </div>
       )}
 
@@ -267,11 +281,13 @@ export function InboxView({ openItemId = null, onOpenItemHandled }: InboxViewPro
       )}
 
       {selectedItem && (
-        <ItemDetail
-          item={selectedItem}
-          onClose={() => setSelectedItem(null)}
-          onUpdated={() => { void reload(); setSelectedItem(null); }}
-        />
+        <Suspense fallback={<div className="detail-loading">載入中…</div>}>
+          <ItemDetail
+            item={selectedItem}
+            onClose={() => setSelectedItem(null)}
+            onUpdated={() => { void reload(); setSelectedItem(null); }}
+          />
+        </Suspense>
       )}
     </div>
   );
