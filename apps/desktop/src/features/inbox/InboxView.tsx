@@ -175,13 +175,14 @@ export function InboxView({ openItemId = null, onOpenItemHandled }: InboxViewPro
       <header className="inbox-header">
         <h2>收件匣</h2>
         <span className="inbox-count">{items.length} 個項目</span>
-        {/* INB-002 smart-view grouping selector */}
-        <div className="group-mode-selector" role="tablist" aria-label="分組方式">
+        {/* INB-002 smart-view grouping selector: view-switch buttons
+            (not tabs — there is no tabpanel, so tab semantics would lie to AT) */}
+        <div className="group-mode-selector" role="group" aria-label="分組方式">
           {GROUP_MODES.map((m) => (
             <button
               key={m.value}
-              role="tab"
-              aria-selected={groupMode === m.value}
+              type="button"
+              aria-pressed={groupMode === m.value}
               className={`group-mode-btn ${groupMode === m.value ? "active" : ""}`}
               onClick={() => setGroupMode(m.value)}
             >
