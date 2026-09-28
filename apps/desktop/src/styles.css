@@ -92,6 +92,7 @@ body {
 .capture-actions {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 0.75rem;
   margin-top: 0.5rem;
 }
@@ -139,6 +140,8 @@ body {
   padding: 0.3rem 0.5rem;
   font-size: 0.8rem;
   max-width: 180px;
+  min-width: 0;
+  flex: 1 1 120px;
 }
 
 /* Inbox */
@@ -1629,11 +1632,13 @@ button, input, textarea, select { font: inherit; }
 button { min-height: 32px; }
 button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-visible,
 [tabindex]:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; }
-.command-bar .search-container { flex: 1; min-width: 120px; max-width: 720px; padding: 0; border: 0; position: relative; }
+.command-bar .search-container { flex: 1 1 200px; min-width: 0; max-width: 720px; padding: 0; border: 0; position: relative; }
 .command-bar .search-filters { position: absolute; top: 47px; left: 0; z-index: 30; margin: 0; }
 .command-bar .search-results { position: absolute; left: 0; right: 0; top: 47px; z-index: 25; margin: 0; padding: 5px; background: var(--color-surface-raised); border: 1px solid var(--color-border-strong); border-radius: var(--radius-md); box-shadow: var(--shadow-panel); }
 @media (max-width: 980px) {
-  .command-context { min-width: 112px; }
+  .command-context { min-width: 0; flex: 0 1 auto; }
+  .command-context .eyebrow { display: none; }
+  .command-title { font-size: 0.95rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 28vw; }
   .command-status { display: none; }
   /* Full-sheet inspector on tablet and below — single monotonic rule;
      narrower breakpoints only adjust inner padding, not geometry. */
@@ -1684,6 +1689,8 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .command-bar {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
+  row-gap: 8px;
   gap: 16px;
   width: 100%;
   flex: 0 0 auto;
@@ -1692,9 +1699,10 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .command-context,
 .command-status,
 .command-capture { display: inline-flex; align-items: center; }
-.command-context { gap: 9px; min-width: 150px; }
+.command-context { gap: 9px; min-width: 150px; flex: 0 1 auto; }
+.command-bar .search-container { flex: 1 1 200px; min-width: 0; }
 .command-status { gap: 7px; white-space: nowrap; }
-.command-capture { gap: 5px; justify-content: center; }
+.command-capture { gap: 5px; justify-content: center; flex: 0 0 auto; }
 .sidebar-nav { display: flex; flex-direction: column; min-height: 0; flex: 1; overflow-y: auto; }
 .sidebar { overflow: hidden; }
 .sidebar .nav-item,
