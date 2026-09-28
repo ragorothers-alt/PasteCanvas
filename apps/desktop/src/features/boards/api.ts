@@ -165,6 +165,16 @@ export interface Folder {
   updatedAt: number;
 }
 
+/** Minimal row for a trashed board/folder (Trash restore section). */
+export interface TrashedEntry {
+  id: string;
+  name: string;
+  deletedAt: number;
+}
+
+/** Fired when board/folder lists change so the sidebar can refresh. */
+export const BOARDS_CHANGED_EVENT = "paste-canvas://boards-changed";
+
 export async function listFolders(): Promise<Folder[]> {
   return invoke<Folder[]>("list_folders");
 }
@@ -177,12 +187,22 @@ export async function renameFolder(folderId: string, name: string): Promise<void
   return invoke<void>("rename_folder", { folderId, name });
 }
 
-export async function moveFolder(folderId: string, newParentId?: string): Promise<void> {
-  return invoke<void>("move_folder", { folderId, newParentId });
-}
-
 export async function trashFolder(folderId: string): Promise<void> {
   return invoke<void>("trash_folder", { folderId });
+}
+
+/** Trashed boards (restore section of the Trash view). */
+export async function listTrashedBoards(): Promise<TrashedEntry[]> {
+  return invoke<TrashedEntry[]>("list_trashed_boards");
+}
+
+/** Trashed folders (restore section of the Trash view). */
+export async function listTrashedFolders(): Promise<TrashedEntry[]> {
+  return invoke<TrashedEntry[]>("list_trashed_folders");
+}
+
+export async function restoreBoard(boardId: string): Promise<void> {
+  return invoke<void>("restore_board", { boardId });
 }
 
 export async function restoreFolder(folderId: string): Promise<void> {
@@ -201,6 +221,3 @@ export async function toggleBoardFavorite(boardId: string): Promise<boolean> {
   return invoke<boolean>("toggle_board_favorite", { boardId });
 }
 
-export async function restoreBoard(boardId: string): Promise<void> {
-  return invoke<void>("restore_board", { boardId });
-}

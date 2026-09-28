@@ -3,6 +3,7 @@
  * components can stay framework-agnostic (and E2E-testable in a plain
  * browser). Mounted once in App; outside the Tauri runtime it is a no-op.
  */
+import { listen } from "@tauri-apps/api/event";
 import { isTauri } from "./runtime";
 
 const FORWARDED_EVENTS = [
@@ -22,7 +23,6 @@ const FORWARDED_EVENTS = [
 export async function startTauriEventBridge(): Promise<() => void> {
   if (!isTauri()) return () => {};
 
-  const { listen } = await import("@tauri-apps/api/event");
   const unlisteners = await Promise.all(
     FORWARDED_EVENTS.map((name) =>
       listen<unknown>(name, (e) => {

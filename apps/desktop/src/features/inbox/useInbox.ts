@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import { archiveItem, queryInbox, toggleFavorite, togglePin, trashItem } from "./api";
 import type { ItemSummary } from "./api";
 import { isTauri } from "../../lib/runtime";
@@ -181,7 +181,7 @@ export function useInbox() {
     setItems((prev) => prev.filter((item) => !gone.has(item.id)));
   }, []);
 
-  const groups = groupItems(items, groupMode);
+  const groups = useMemo(() => groupItems(items, groupMode), [items, groupMode]);
 
   return {
     items,

@@ -75,6 +75,8 @@ export interface ExplorerMenuRegistration {
   dllPath: string;
   sparseManifestPath: string | null;
   registered: boolean;
+  modernRegistered: boolean;
+  modernError: string | null;
 }
 
 /** Registers the IExplorerCommand COM server for the modern Explorer menu (CAP-007). */

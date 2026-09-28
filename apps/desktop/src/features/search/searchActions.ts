@@ -7,7 +7,7 @@
  */
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { getItemContent, openSource, toggleFavorite } from "../inbox/api";
-import { getItemBoardNodes, placeItemOnBoard } from "../boards/api";
+import { getItemBoardNodes } from "../boards/api";
 import type { ItemBoardNode } from "../boards/api";
 
 /** Dispatches the open-item event so the Inbox shows the item detail panel. */
@@ -61,9 +61,4 @@ export function navigateToBoard(boardId: string): void {
   window.dispatchEvent(
     new CustomEvent("paste-canvas://open-board", { detail: { boardId } }),
   );
-}
-
-/** SRC-003: adds the item to a board at a default position. */
-export async function addToBoard(itemId: string, boardId: string): Promise<string> {
-  return placeItemOnBoard(boardId, itemId, 100, 100);
 }

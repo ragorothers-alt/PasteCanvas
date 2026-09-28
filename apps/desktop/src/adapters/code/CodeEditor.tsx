@@ -3,12 +3,12 @@ import { EditorState } from "@codemirror/state";
 import { EditorView, keymap, lineNumbers, highlightActiveLine } from "@codemirror/view";
 import { defaultKeymap, history, historyKeymap } from "@codemirror/commands";
 import { oneDark } from "@codemirror/theme-one-dark";
+import { getLanguageExtension } from "./CodeMirrorAdapter";
 import {
   detectLanguage,
-  getLanguageExtension,
   languageDisplayName,
-} from "./CodeMirrorAdapter";
-import type { SupportedLanguage } from "./CodeMirrorAdapter";
+} from "./languageDetect";
+import type { SupportedLanguage } from "./languageDetect";
 
 interface CodeEditorProps {
   code: string;

@@ -1,7 +1,7 @@
 import { getSetting, setSetting } from "../features/settings/api";
 
 export type ThemeMode = "light" | "dark" | "system";
-export const THEME_STORAGE_KEY = "pastecanvas.theme";
+const THEME_STORAGE_KEY = "pastecanvas.theme";
 
 function isThemeMode(value: string | null | undefined): value is ThemeMode {
   return value === "light" || value === "dark" || value === "system";

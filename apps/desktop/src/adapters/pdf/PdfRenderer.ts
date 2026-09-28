@@ -2,12 +2,24 @@
  * PDF first-page renderer using pdf.js (PRD: PDF 第一頁縮圖).
  * Per AGENTS.md: "PDF viewer mounts only in focused detail/lightbox" —
  * this renderer is invoked lazily by PdfPreview, not eagerly in list cards.
+ * pdf.js itself (~1MB) is loaded on demand via dynamic import so it never
+ * lands in the main bundle.
  */
-import * as pdfjsLib from "pdfjs-dist";
-// Vite ?url import gives a resolvable worker asset path
+// Vite ?url import gives a resolvable worker asset path (asset reference only)
 import pdfWorkerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
 
-pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
+let pdfjsPromise: Promise<typeof import("pdfjs-dist")> | null = null;
+
+/** Loads pdf.js once, configuring the worker on first use. */
+function loadPdfJs(): Promise<typeof import("pdfjs-dist")> {
+  if (!pdfjsPromise) {
+    pdfjsPromise = import("pdfjs-dist").then((pdfjsLib) => {
+      pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
+      return pdfjsLib;
+    });
+  }
+  return pdfjsPromise;
+}
 
 /** Decodes a base64 string to a Uint8Array (for pdf.js input). */
 export function base64ToUint8Array(base64: string): Uint8Array {
@@ -35,6 +47,7 @@ export async function renderFirstPage(
   canvas: HTMLCanvasElement,
   maxWidth: number,
 ): Promise<RenderResult> {
+  const pdfjsLib = await loadPdfJs();
   const loadingTask = pdfjsLib.getDocument({ data });
   const pdf = await loadingTask.promise;
   const pageCount = pdf.numPages;

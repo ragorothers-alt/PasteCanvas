@@ -73,6 +73,8 @@ export function SettingsView({ theme = "system", onThemeChange }: SettingsViewPr
   const [autostart, setAutostartState] = useState(false);
   const [dataMsg, setDataMsg] = useState<string | null>(null);
   const [restorePath, setRestorePath] = useState("");
+  const [privacyMsg, setPrivacyMsg] = useState<string | null>(null);
+  const [windowMsg, setWindowMsg] = useState<string | null>(null);
   const [activeCategory, setActiveCategory] = useState<SettingsCategory>("general");
 
   const load = useCallback(async () => {
@@ -97,7 +99,11 @@ export function SettingsView({ theme = "system", onThemeChange }: SettingsViewPr
     setCloseToTray(next);
     try {
       await setSetting("ui.close_to_tray", next ? "true" : "false");
-    } catch { /* ignore */ }
+      setWindowMsg(null);
+    } catch (e) {
+      setCloseToTray(!next);
+      setWindowMsg(`無法更新視窗設定：${String(e)}`);
+    }
   }, [closeToTray]);
 
   const handleToggleAutostart = useCallback(async () => {
@@ -161,22 +167,31 @@ export function SettingsView({ theme = "system", onThemeChange }: SettingsViewPr
     try {
       await addExclusion("process_name", newExclusion.trim());
       setNewExclusion("");
+      setPrivacyMsg(null);
       void load();
-    } catch { /* ignore */ }
+    } catch (e) {
+      setPrivacyMsg(`無法新增排除項目：${String(e)}`);
+    }
   }, [newExclusion, load]);
 
   const handleToggle = useCallback(async (id: string) => {
     try {
       await toggleExclusion(id);
+      setPrivacyMsg(null);
       void load();
-    } catch { /* ignore */ }
+    } catch (e) {
+      setPrivacyMsg(`無法更新排除項目：${String(e)}`);
+    }
   }, [load]);
 
   const handleRemove = useCallback(async (id: string) => {
     try {
       await removeExclusion(id);
+      setPrivacyMsg(null);
       void load();
-    } catch { /* ignore */ }
+    } catch (e) {
+      setPrivacyMsg(`無法移除排除項目：${String(e)}`);
+    }
   }, [load]);
 
   // WIN-005: hotkey editing — changes apply immediately (backend re-registers)
@@ -243,11 +258,17 @@ export function SettingsView({ theme = "system", onThemeChange }: SettingsViewPr
     setModernMsg(null);
     try {
       const res = await registerModernExplorerMenu();
-      const script = res.sparseManifestPath
-        ? ` Windows 11 精簡選單不會自動出現，請用系統管理員執行：${res.sparseManifestPath}`
-        : "";
+      if (!res.registered) {
+        setModernMsg("註冊失敗：傳統右鍵也沒有寫入。");
+        return;
+      }
+      if (res.modernRegistered) {
+        setModernMsg("已註冊傳統右鍵與 Windows 11 精簡選單。重新啟動檔案總管後生效。");
+        return;
+      }
+      const reason = res.modernError ? `原因：${res.modernError}` : "未套用稀疏套件。";
       setModernMsg(
-        `已接上「顯示更多選項」右鍵（ExplorerCommandHandler）。${script}`,
+        `傳統右鍵（顯示更多選項）已註冊。Windows 11 精簡選單尚未套用。${reason}`,
       );
     } catch (e) {
       setModernMsg(`註冊失敗：${String(e)}`);
@@ -364,6 +385,7 @@ export function SettingsView({ theme = "system", onThemeChange }: SettingsViewPr
           />
           <span>開機時啟動 PasteCanvas</span>
         </label>
+        {windowMsg && <p className="settings-hint">{windowMsg}</p>}
       </section>
       </>}
 
@@ -459,7 +481,7 @@ export function SettingsView({ theme = "system", onThemeChange }: SettingsViewPr
       <section className="settings-section">
         <h3>新版檔案總管選單（Windows 11）</h3>
         <p className="settings-hint">
-          為「顯示更多選項」註冊 IExplorerCommand。Windows 11 精簡選單還需要另外執行寫出的稀疏套件指令碼，不會在按註冊時假裝已完成。
+          會先寫入傳統右鍵，再嘗試向系統註冊 Windows 11 精簡選單。套件註冊失敗時會顯示原因，不會假裝已完成。
         </p>
         <div className="exclusion-add">
           <button className="btn-add-exclusion" onClick={() => void handleRegisterModern()}>
@@ -537,6 +559,7 @@ export function SettingsView({ theme = "system", onThemeChange }: SettingsViewPr
             </li>
           ))}
         </ul>
+        {privacyMsg && <p className="settings-hint">{privacyMsg}</p>}
       </section>}
       {activeCategory === "data" && <section className="settings-section">
         <h3>備份與匯出</h3>

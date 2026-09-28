@@ -2,7 +2,7 @@
  * CanvasMapper — converts Rust BoardNode DTOs to React Flow nodes and back.
  * React Flow-specific types stay here; persistence types stay in features/boards/api.
  */
-import type { Node, Edge, XYPosition } from "@xyflow/react";
+import type { Node, Edge } from "@xyflow/react";
 import type { BoardNode, BoardEdge } from "../../features/boards/api";
 
 export interface ItemCardData {
@@ -77,19 +77,4 @@ export function toFlowEdge(dto: BoardEdge): Edge {
 /** Maps an array of BoardEdge DTOs to React Flow edges. */
 export function toFlowEdges(dtos: BoardEdge[]): Edge[] {
   return dtos.map(toFlowEdge);
-}
-
-/** Extracts position changes from React Flow nodes for persistence. */
-export function extractMoves(
-  nodes: CanvasNode[],
-  originalPositions: Map<string, XYPosition>,
-): Array<{ nodeId: string; x: number; y: number }> {
-  const moves: Array<{ nodeId: string; x: number; y: number }> = [];
-  for (const node of nodes) {
-    const orig = originalPositions.get(node.id);
-    if (orig && (orig.x !== node.position.x || orig.y !== node.position.y)) {
-      moves.push({ nodeId: node.id, x: node.position.x, y: node.position.y });
-    }
-  }
-  return moves;
 }

@@ -247,17 +247,423 @@ All quality gates pass:
   managed state, drained via get_startup_hotkey_failures, and surfaced as an
   error toast with rebind guidance (visible + recoverable)
 
-## 98 Tauri Commands
+## 95 Tauri Commands (measured 2026-08-21, round 16–18)
 
 ```
-Capture (8) | Inbox (18: +get_item_thumbnail) | Search (4: +verify/rebuild/optimize index) | Board (26: +recent boards, folders CRUD/move/reorder, board favorite/restore/reorder) | Session (5)
-Backup (4) | Settings (9: +get_startup_hotkey_failures) | Tags (7) | Window (10: +close_quick_capture focus-restore) | Health (1) | Browser (2) | Explorer (5)
+boards (33) | inbox (17) | settings (9) | tags (7) | sessions (5) |
+backup (4) | capture (4) | search (4) | window (4) | explorer (3) |
+browser (2) | explorer_menu (2) | health (1)
 ```
+
+Dead shells removed in rounds 16–18: capture_clipboard, capture_image,
+capture_screenshot, start_region_capture, toggle/get_always_on_top,
+show/hide/toggle_main_window, hide_quick_capture (platform functions
+get_always_on_top/hide_main_window removed with them).
 
 ## Remaining work (future iterations)
 
 - (None blocking) Full GUI E2E against a built Tauri binary requires a Windows desktop session
   (WebView2 + display). UI shell is verified via Playwright against the dev server.
+
+## 2026-08-21 architecture optimization pass
+
+### Round 25 — audit coverage complete; convergence verified
+
+- packages/config was an empty vestigial directory (no package.json, nothing
+  tracked) — removed; pnpm workspace glob now matches only real packages.
+- design-qa.md verified consistent with the implementation (Traditional
+  Chinese UI, themes, viewports). SCAN_REPORT.md (2026-08-16) confirmed as
+  the historical input artifact; its High findings are all addressed in the
+  rounds above (SVG sanitize wiring, SEC-001 SSRF/DNS-rebinding, fail-closed
+  exclusions, open_source scheme validation, WIN-006 NMH protocol).
+- No code changes this round; consolidated gate re-run on the current tree:
+  fmt 0, Rust 341/29 suites, dead-command scan OK (95). FE/E2E unchanged
+  since their last green runs (217 Vitest, 22/22 E2E).
+- Audit state: every code surface in the workspace has been read and
+  audited; every finding fixed and gate-verified; continuity mechanized in
+  CI (rust-gate, frontend-gate, arch-gate, e2e). Remaining items are
+  reasoned and documented, not overlooked: move_folder UI (allowlisted
+  product gap), desktop-session startup timing (environment-blocked),
+  committing the work (user decision).
+
+### Round 24 — COM DLL lifetime correctness (last unread code)
+
+- pastecanvas-explorer-dll audited (final unread surface). Found a real COM
+  lifetime bug: MODULE_REFCOUNT was only touched by LockServer, so
+  DllCanUnloadNow could report S_OK while Explorer still held IExplorerCommand
+  pointers — an unload in that window would crash the shell. Fixed with the
+  standard pattern: Drop impls on PasteCanvasCommand/PasteCanvasFactory
+  decrement, creation sites increment; DllCanUnloadNow is now truthful.
+- Removed the E_NOINTERFACE import-suppression hack (dead const).
+- Verification (round 24): cargo fmt clean; clippy -D warnings 0 (DLL
+  compiles on Windows); cargo test --workspace 341 passed.
+- With this, every code surface in the workspace has been read and audited:
+  all Rust layers/jobs/platform/commands/DLL, all TS dirs, the browser
+  extension, and both packages' docs.
+
+### Round 23 — workspace-level doc truth + repo hygiene
+
+- Browser extension audited: MV3, minimal permissions (contextMenus +
+  nativeMessaging), WIN-006 protocol fields present — clean, no changes.
+- Removed apps/desktop/bs_grep.txt (leftover scratch file from round-15
+  sweep; untracked junk).
+- pastecanvas-blueprint/STATUS.md corrected: it still claimed "Not started —
+  no implementation exists". Now points to the implementation's measured
+  record (phase completion, release perf numbers, migration v3, test gates).
+
+### Round 22 — last blocking OS work off the async runtime
+
+- Final sweep of the commands layer for subprocess/blocking OS calls on async
+  threads; every registration path spawns reg.exe (50–150ms each) or
+  PowerShell (seconds):
+  - explorer_menu register/unregister (≈12 reg spawns + PowerShell)
+  - browser host register/unregister (manifest write + reg spawns)
+  - explorer integration register/unregister (6 reg spawns)
+  - set_autostart (1 reg spawn)
+  - empty_trash orphan file deletions (N remove_file calls)
+  All moved to spawn_blocking; async runtime no longer stalls on OS work.
+- Verification (round 22): cargo fmt clean; clippy -D warnings 0;
+  cargo test --workspace 341 passed (29 suites). Frontend untouched.
+
+### Round 21 — last render-path memoization + consolidated final gate
+
+- App.tsx sidebar tree and useInbox grouping were recomputed on every
+  render; both now useMemo'd ([folders, boards] / [items, groupMode]).
+- Consolidated final gate, all green in one pass:
+  cargo fmt --check 0 · clippy -D warnings 0 · cargo test 341/29 suites ·
+  ESLint 0 · tsc 0 · Vitest 217 + contracts 15 · dead-command scan OK (95) ·
+  Playwright E2E 22/22.
+
+### Round 20 — release-mode benchmarks + join-column index audit
+
+- PERF-001 re-measured in RELEASE mode (prior numbers were debug builds):
+  - capture_text: 0.80ms avg (target <10ms)
+  - inbox query 1k: 0.30ms avg
+  - FTS unicode MATCH 20k: p95 9.33ms (target <150ms, 16x headroom)
+  - FTS trigram MATCH 20k: p95 0.18ms; FTS 5k: p95 0.17ms
+  - 6/6 bench assertions pass in 3.9s
+- query_inbox join columns audited: search_documents.item_id UNIQUE,
+  item_assets PK(item_id, asset_id, role), source_contexts PK — every LEFT
+  JOIN is index-backed. No change needed.
+
+### Round 19 — dead-IPC methodology mechanized into CI
+
+- scripts/check-dead-commands.mjs: every registered Tauri command must have a
+  TS invoke caller or a Rust-internal code reference; string literals are
+  stripped from the Rust side so tracing/log text never counts as a caller
+  (the negative test proved the naive version counted `event = "health_check"`
+  as a caller — fixed before shipping).
+- Exceptions require a written reason in ALLOWLIST; stale allowlist entries
+  (unregistered names) fail the check, so the allowlist cannot rot silently.
+- Wired as `pnpm check:dead-commands` and as CI job `arch-gate` (ubuntu,
+  node-only, seconds to run). Rounds 16–18's manual sweep is now machine
+  discipline on every push/PR.
+- Verified both directions: exit 0 on the current tree (95 commands, 2
+  reasoned allowlist entries); exit 1 when an allowlist entry is removed.
+
+### Round 18 — post-deletion orphan sweep + doc truth
+
+- Round-16 command deletions left two platform-layer orphans (pub fns are
+  invisible to clippy's dead_code): window_manager::get_always_on_top and
+  ::hide_main_window — removed after verifying zero callers.
+- STATUS command inventory replaced with measured per-module counts (95);
+  the old "98 commands" block was stale documentation.
+- Verification (round 18): cargo fmt clean; clippy -D warnings 0;
+  cargo test --workspace 341 passed (29 suites).
+
+### Round 17 — application-layer audit complete, export unblocked
+
+- Audited the last unreviewed application services:
+  - session_service: clean (validated state machine, privacy-by-default,
+    single-session invariant)
+  - settings_service: clean (idempotent defaults, ON CONFLICT upserts backed
+    by real UNIQUE constraints — verified against schema)
+  - job_runner: clean (lease reclaim uses the partial index; FTS stays in
+    sync with title updates via the AFTER UPDATE trigger — verified)
+- One real find: create_export wrote one blocking std::fs::write per item on
+  the async runtime (5k items = 5k runtime stalls). All file writes moved to
+  spawn_blocking; DB reads stay async.
+- Verification (round 17): cargo fmt clean; clippy -D warnings 0;
+  cargo test --workspace 341 passed (29 suites).
+
+### Round 16 — dead IPC surface removed
+
+- Systematic sweep: every registered Tauri command checked for TS invoke
+  callers AND Rust-internal callers. ARC-001 (platform calls platform,
+  never commands) left 11 command shells with zero callers anywhere —
+  pure IPC attack surface with no function:
+  - capture_clipboard, capture_image (frontend paths refactored away in R11)
+  - capture_screenshot, start_region_capture (hotkeys call window_manager
+    directly; also removed the now-orphaned platform::capture_screen)
+  - toggle/get_always_on_top, show/hide/toggle_main_window, hide_quick_capture
+    (tray/hotkeys call window_manager directly)
+  - Underlying capabilities all remain live via their real paths.
+- Kept: health_check (diagnostic), move_folder (documented product gap).
+- Registered command count now measured at 95 (the old "98 commands"
+  doc figure was never reconciled; treat measured counts as authoritative).
+- Verification (round 16): cargo fmt clean; clippy -D warnings 0;
+  cargo test --workspace 341 passed; 22/22 Playwright E2E.
+
+### Round 15 — last N+1: sidebar board summaries
+
+- query_board_summaries (list_boards + get_recent_boards) ran a per-board
+  COUNT(*) round trip inside a loop — N queries per sidebar refresh.
+  Rewritten as one aggregated LEFT JOIN (node_count in the same SELECT);
+  soft-deleted nodes still excluded by the aggregate's predicate.
+- Regression test list_boards_reports_node_count_from_aggregate: 2 live +
+  1 soft-deleted node → node_count == 2.
+- Verification (round 15): cargo fmt clean; clippy -D warnings 0;
+  cargo test --workspace 341 passed (29 suites).
+
+### Round 14 — test coverage for the new UI + browser verification
+
+- Rounds 12–13 shipped UI with zero test coverage; closed that gap:
+  - TrashView.test.tsx (5): restore section renders boards+folders, restore
+    calls the command / hides the row / dispatches boards-changed, empty
+    state, graceful backend failure.
+  - TagSelector.test.tsx (5): dropdown management actions render, rename
+    saves via Enter, Escape cancels, delete honors the confirm (and reports
+    affected item count), cancelled confirm deletes nothing.
+- Browser verification against the Vite dev server: inbox shell and the
+  lazy-loaded TrashView render correctly (screenshots in output/);
+  Suspense fallback observed and resolved without errors.
+- Verification (round 14): 217/217 Vitest (26 suites); ESLint 0; tsc 0.
+
+### Round 13 — tag management wired (rename/delete)
+
+- Second product gap from the round-11 sweep closed: rename_tag / delete_tag
+  backend commands (tested, registered since Phase 1) had no UI.
+  - TagSelector dropdown rows gained management actions: inline rename
+    (✏ → input, Enter saves / Esc cancels) and delete (🗑 with a confirm
+    that reports how many items will lose the tag).
+  - tags/api wrappers restored with real callers; delete_tag runs the
+    existing transactional path that also rebuilds search tags_text.
+- move_folder (folder reparenting) evaluated and intentionally left unwired:
+  low-frequency operation needing a drag-across-parents interaction design;
+  backend stays tested and registered. Recorded as the only remaining gap.
+- Verification (round 13): tsc/ESLint 0; 207/207 Vitest; 22/22 Playwright
+  E2E. Rust untouched this round (prior 340/340 still authoritative).
+
+### Round 12 — wired the board/folder restore gap closed
+
+- Round 11's dead-wrapper sweep exposed a product gap: restore_board /
+  restore_folder backend commands had no UI path (STATUS claimed BRD-006
+  restore since Phase 2). Closed it end-to-end instead of deleting working
+  backend code:
+  - Backend: TrashedEntryDto + list_trashed_boards / list_trashed_folders
+    (lightweight deleted_at-ordered listings), two new commands registered.
+  - Frontend: TrashView gained a “看板與資料夾” restore section (boards +
+    folders, restore buttons, graceful no-backend fallback); restore dispatches
+    paste-canvas://boards-changed which App listens to and refreshes the
+    sidebar tree.
+  - boards/api wrappers restored WITH real callers this time
+    (restoreBoard/restoreFolder/listTrashed*) + TrashedEntry type +
+    BOARDS_CHANGED_EVENT constant.
+- Remaining documented gaps: move_folder (reparenting) — intentionally
+  unwired, backend tested and registered.
+- Verification (round 12): cargo fmt clean; clippy -D warnings 0;
+  cargo test --workspace 340 passed (2 new trash/restore round-trip tests);
+  tsc/ESLint 0; 207/207 Vitest; 22/22 Playwright E2E.
+
+### Round 11 — export-level dead code sweep
+
+- Full sweep of exported functions/consts across features/stores/lib/adapters
+  against every import site (app + tests). Results:
+  - Deleted dead API wrappers (zero call sites, backend commands untouched):
+    boards moveFolder/restoreFolder/restoreBoard, inbox captureClipboard/
+    captureImage, tags renameTag/deleteTag, searchActions addToBoard.
+    Note: folder/board restore remains a product gap — backend commands
+    exist but no UI path reaches them.
+  - Deleted CanvasMapper.extractMoves (+ its now-unused XYPosition import).
+  - Demoted to module-private: THEME_STORAGE_KEY, CAPTURE_FAILURE_EVENTS,
+    CAPTURE_SUCCESS_EVENTS (used only inside their own files).
+  - Deleted RichTextEditor.tsx (zero mount points since Phase 1) and removed
+    the @tiptap/pm + @tiptap/react + @tiptap/starter-kit dependencies it
+    carried (round-1 deferral resolved: the repo is under git, deletion is
+    recoverable). Pure rich-text adapters + their tests remain.
+- Verification (round 11): pnpm install clean; tsc 0; ESLint 0; 207/207
+  Vitest + 15/15 contracts; 22/22 Playwright E2E; production build clean.
+
+### Round 10 — search path audit & shared helper bootstrap
+
+- Search path audited: FTS unicode + trigram MATCH paths are index-driven;
+  the 1–2 char LIKE fallback is a physical necessity (leading-wildcard LIKE
+  cannot use a B-tree index) and remains as designed.
+- Frontend runtime audited: useInbox is event-driven (no polling), mutations
+  update local state optimistically; SessionControl's 5s session poll is a
+  single local IPC — acceptable.
+- Duplicated out-of-process bootstrap eliminated: pastecanvas-nmh and
+  pastecanvas-explorer each carried their own copy of the data-dir layout
+  (APP_IDENTIFIER + DB_FILENAME + resolve_data_dir) and open/migrate
+  sequence. Extracted to bootstrap::external (resolve_data_dir +
+  open_migrated_db); both binaries now consume it (~80 duplicate lines
+  removed, layout defined exactly once).
+- Verification (round 10): cargo fmt clean; clippy -D warnings 0;
+  cargo test --workspace 338 passed (29 suites).
+
+### Round 9 — measured query plans, corrected round-8 finding
+
+- Added hot_path_queries_use_their_indexes: EXPLAIN QUERY PLAN regression
+  guard — an index that exists but is never chosen is the same as no index.
+  Verified plans: URL dedup → ix_items_normalized_url, hash dedup →
+  ix_items_content_hash, asset lookup → sqlite_autoindex_assets (implicit
+  UNIQUE), inbox list → ix_items_inbox.
+- Measurement corrected a round-8 finding: assets.sha256 was NEVER missing an
+  index — the UNIQUE constraint in 001 already carries an implicit unique
+  index. The ix_assets_sha256 added in 003 was redundant and has been removed
+  from migration 003 (only ix_items_normalized_url remains).
+- query_inbox default path rewritten: `inbox_status != 'archived'` (cannot use
+  the partial index) → `inbox_status IN ('new','triaged')` (index-driven,
+  semantically identical — status has exactly three values).
+- Verification (round 9): cargo fmt clean; clippy -D warnings 0;
+  cargo test --workspace 338 passed (29 suites).
+
+### Round 8 — index audit of the capture hot path
+
+- Audited all 26 schema indexes against production query paths. One capture
+  hot path was doing a full-table scan on every capture:
+  - URL dedup (`find_item_by_normalized_url`) — ran per captured link with no
+    index on items.normalized_url
+  - (The assets.sha256 lookup flagged here turned out to be covered by the
+    UNIQUE constraint's implicit index — see Round 9 correction.)
+- Fixed via migration 003_capture_dedup_indexes (additive partial index;
+  001/002 untouched per migration contract).
+- New regression test capture_dedup_indexes_exist_after_migration; migrator
+  version assertions bumped to 3.
+- NMH per-invocation migration cost verified negligible (checksum lookups
+  short-circuit; no writes on an up-to-date DB).
+- Verification (round 8): cargo fmt clean; clippy -D warnings 0;
+  cargo test --workspace 337 passed (29 suites).
+
+### Round 7 — gates frozen into CI
+
+- Added .github/workflows/ci.yml (was: none — every gate was run by hand,
+  which is why 13 stale E2E specs survived undetected for a week):
+  - rust-gate: cargo fmt --check, clippy --workspace --all-targets
+    -D warnings, cargo test --workspace (windows-latest — Win32 code only
+    compiles there)
+  - frontend-gate: pnpm install --frozen-lockfile, lint, typecheck,
+    workspace vitest (desktop 207 + contracts-ts 15)
+  - e2e: Playwright Chromium against the Vite dev server (22 specs),
+    report uploaded as artifact on failure
+- Every CI command was run locally this session and passes: frozen-lockfile
+  install, root lint/typecheck/test, all Rust gates, E2E 22/22.
+
+### Round 6 — measured release builds & last blocking paths
+
+- First measured release build (no profile existed — shipped binaries were
+  built with raw cargo defaults). Baseline vs optimized profile
+  (`lto = "thin"`, `codegen-units = 1`, `strip = "symbols"` in workspace
+  Cargo.toml):
+  - pastecanvas-desktop.exe: 20.98MB → 18.81MB (-10%)
+  - pastecanvas-nmh.exe: 4.03MB → 3.19MB (-21%)
+  - pastecanvas-explorer.exe: 3.79MB → 2.91MB (-23%)
+  - explorer COM DLL: 0.22MB → 0.21MB
+- Last two blocking-on-async paths moved to the blocking pool:
+  - backup_service create_backup: DB sha256 + recursive asset copy
+  - link_metadata: reqwest Client rebuilt per job → shared OnceLock client
+    (connection pool + TLS session reuse)
+- PERF-001 benchmarks re-run: 6/6 pass (including 20k-item FTS p95).
+- Verification (round 6): cargo fmt clean; clippy -D warnings 0;
+  cargo test --workspace 336 passed (29 suites); release build clean.
+  Frontend untouched this round (prior gates still authoritative).
+
+### Round 5 — startup consolidation, dead dep, detail-panel split
+
+- app_builder setup consolidated: 4 sequential `block_on` runtime entries
+  merged into 2 (DB open + migrations + device id in one; settings defaults +
+  hotkey registration in one). Job runner / tray setup order preserved.
+- Removed `zod` from @pastecanvas/desktop dependencies — zero references in
+  app code (the contract schemas own their zod dependency in contracts-ts).
+- ItemDetail (inspector + previews) is now a React.lazy chunk mounted only
+  when an item is selected; main bundle 342KB → 335KB.
+- Cumulative main-bundle weight across rounds: ~1.4MB eager → 335KB (-76%).
+- Verification (round 5): cargo fmt clean; clippy -D warnings 0;
+  cargo test --workspace 336 passed (29 suites); pnpm lint/tsc clean;
+  207/207 Vitest; 22/22 Playwright E2E; production build clean.
+
+### Round 4 — blocking work off the async runtime & view code-splitting
+
+- Audit found CPU/IO-heavy synchronous work running directly on tokio async
+  tasks (would stall UI events, job runner and hotkeys during large captures).
+  All of it moved to `tokio::task::spawn_blocking`:
+  - New `AssetStore::stage_bytes_async` (SHA-256 + SVG sanitize + disk write +
+    atomic rename); migrated all 5 staging call sites (clipboard PNG, file
+    capture, explorer capture, capture_image command, both screenshot paths)
+  - `capture_screen` / `capture_region` (GDI grab + PNG encode) wrapped at the
+    command layer
+  - New `snapshot_clipboard_async` for the tray and session-watcher paths
+    (Win32 clipboard read + RGBA→PNG encode were inline in async tasks)
+  - `get_item_thumbnail`: PNG decode + box downscale + encode + cache write
+    (hottest path — inbox card first render); `get_item_asset_base64`: file
+    read + base64 encode
+- Frontend view code-splitting: BoardView (ReactFlow ~209KB), SettingsView
+  (22KB) and TrashView (5KB) are now React.lazy chunks mounted on navigation.
+  Main bundle 578KB → 342KB (-41%).
+- Verification (round 4): cargo fmt clean; clippy -D warnings 0;
+  cargo test --workspace 336 passed; pnpm lint/tsc clean; 207/207 Vitest;
+  22/22 Playwright E2E; production build clean.
+
+### Round 3 — false dynamic-import removal
+
+- `@tauri-apps/api/event` was dynamically imported in tauriEvents.ts and
+  SessionControl.tsx as a supposed browser-compat optimization, but
+  lib/runtime.ts already statically imports @tauri-apps/api/window (and
+  window.js statically imports event.js) — so event.js was always in the main
+  chunk and the dynamic imports only added a Vite "dynamically imported but
+  also statically imported" warning plus promise-chain complexity. Both sites
+  converted to static imports (isTauri() guard preserved); build warning gone.
+- Verification (round 3): pnpm lint clean; tsc 0 errors; 207/207 Vitest;
+  production Vite build clean (no chunking warnings).
+
+### Round 2 — N+1 query elimination & dead code sweep
+
+- SQL N+1 hot paths rewritten set-based:
+  - board_service group_nodes: N SELECTs + N UPDATEs → 1 IN select + 1 IN update
+  - commands/inbox batch_archive_in_pool / batch_trash_in_pool: per-item UPDATE
+    loop + transaction → single IN UPDATE (rows_affected straight from SQLite)
+  - pool empty_trash orphan scan: 3 queries per candidate asset → 1 NOT EXISTS
+    select + 1 IN delete
+  - search_index_service rebuild: per-item tags_text_for query → single
+    GROUP_CONCAT grouped lookup (helper removed)
+- Deleted dead module stores/useKeyboardShortcuts.ts (zero imports; superseded
+  by the paste-canvas:// event listeners); removed empty [dev-dependencies]
+  section in pastecanvas-explorer-dll.
+- New regression test: rebuild_restores_tags_text (covers the grouped
+  tags path incl. alphabetical ordering and untagged items).
+- Verification record (round 2): cargo fmt --check clean; clippy --workspace
+  --all-targets -D warnings 0; cargo test --workspace 336 passed;
+  pnpm lint clean; tsc 0 errors; 207/207 Vitest.
+
+### Round 1 — dependencies & bundle
+
+Dependency & bundle audit (zero-reference deps removed, heavy code split on demand):
+
+- Removed dead dependencies verified by full-repo grep (0 usages each):
+  Rust `anyhow` + `async-trait`; TS `@tanstack/react-query` (-2 packages installed).
+- `tokio` workspace features trimmed from `full` to `rt + time + macros`
+  (the only tokio APIs actually used: `spawn_blocking`, `time::sleep`,
+  `#[tokio::test]`, current-thread runtime builder in NMH).
+- Bundle code-splitting: pdf.js (~1MB) now loads via dynamic import inside
+  PdfRenderer; CodeEditor (CodeMirror core + 3 language grammars, ~516KB) and
+  PdfPreview are React.lazy chunks mounted only when a code/PDF item is opened.
+  Main bundle 578KB; previously all of it shipped eagerly (~1.4MB).
+- Pure language-detection heuristics extracted to adapters/code/languageDetect.ts
+  (no CodeMirror dependency); CodeMirrorAdapter re-exports them for compatibility.
+- Clippy 1.97 findings fixed: collapsible_if (svg_sanitize), unnecessary
+  lazy evaluation (clipboard CF_HTML decode — the no-op fallback claimed a
+  latin1 path that was never implemented), too_many_arguments
+  (insert_captured_asset_item 14 params → CapturedAssetInsert struct, 6 call sites).
+- E2E repair: 13 of 22 Playwright specs had been stale since the 2026-08-13
+  UX rebuild (asserting English labels/flat settings against the shipped
+  Traditional-Chinese UI + settings category rail). All selectors updated to
+  the real UI incl. focus-within filter chips; 22/22 pass in ~28s.
+- Verification record: cargo fmt clean; clippy --workspace --all-targets
+  -D warnings 0; cargo test --workspace 335 passed; pnpm lint clean;
+  pnpm typecheck 0 errors; 207/207 Vitest; 22/22 Playwright E2E;
+  production Vite build passes with code-split chunks.
+- Known dead weight (removed in Round 11 once git history existed):
+  @tiptap/* deps + RichTextEditor.tsx had no production mount point.
 
 ## 2026-08-13 product-completion pass
 

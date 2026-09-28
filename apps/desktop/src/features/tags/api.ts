@@ -15,10 +15,12 @@ export async function listTags(): Promise<Tag[]> {
   return invoke<Tag[]>("list_tags");
 }
 
+/** Renames a tag globally (affects every item carrying it). */
 export async function renameTag(tagId: string, name: string): Promise<void> {
   return invoke<void>("rename_tag", { request: { tagId, name } });
 }
 
+/** Deletes a tag globally (removes it from every item carrying it). */
 export async function deleteTag(tagId: string): Promise<void> {
   return invoke<void>("delete_tag", { tagId });
 }

@@ -56,10 +56,6 @@ export async function captureText(request: CaptureTextRequest): Promise<CaptureR
   return invoke<CaptureResponse>("capture_text", { request });
 }
 
-export async function captureClipboard(clipboardText: string): Promise<CaptureResponse> {
-  return invoke<CaptureResponse>("capture_clipboard", { clipboardText });
-}
-
 export async function queryInbox(request: QueryInboxRequest): Promise<ItemSummary[]> {
   return invoke<ItemSummary[]>("query_inbox", { request });
 }
@@ -94,10 +90,6 @@ export async function batchArchive(itemIds: string[]): Promise<number> {
 /** INB-003: move a selection to Trash in one application-layer transaction. */
 export async function batchTrash(itemIds: string[]): Promise<number> {
   return invoke<number>("batch_trash", { itemIds });
-}
-
-export async function captureImage(dataBase64: string, sourceApp?: string): Promise<CaptureResponse> {
-  return invoke<CaptureResponse>("capture_image", { request: { dataBase64, sourceApp } });
 }
 
 export async function editItem(
