@@ -1,0 +1,126 @@
+# PasteCanvas quality gates.
+#
+# These are the gates that were previously run by hand (and therefore not
+# run — 13 stale E2E specs survived for a week undetected). Every push and
+# PR must pass all three jobs.
+
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  rust-gate:
+    name: Rust (fmt / clippy / tests)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        run: rustup update stable --no-self-update && rustup default stable && rustup component add rustfmt clippy
+
+      - name: Cache cargo artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: cargo fmt --check
+        run: cargo fmt --check
+
+      - name: cargo clippy -D warnings
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: cargo test --workspace
+        run: cargo test --workspace
+
+  frontend-gate:
+    name: Frontend (lint / typecheck / unit tests)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: pnpm install
+        run: pnpm install --frozen-lockfile
+
+      - name: ESLint
+        run: pnpm lint
+
+      - name: TypeScript
+        run: pnpm typecheck
+
+      - name: Vitest (desktop + contracts-ts)
+        run: pnpm test
+
+  arch-gate:
+    name: Architecture fitness (dead IPC surface)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Dead-command scan
+        run: node scripts/check-dead-commands.mjs
+
+  e2e:
+    name: Playwright E2E (Vite dev server)
+    runs-on: windows-latest
+    needs: frontend-gate
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: pnpm install
+        run: pnpm install --frozen-lockfile
+
+      - name: Install Playwright Chromium
+        working-directory: apps/desktop
+        run: pnpm exec playwright install chromium
+
+      - name: Start Vite dev server
+        working-directory: apps/desktop
+        run: Start-Process -FilePath cmd -ArgumentList "/c pnpm dev" -WindowStyle Hidden
+
+      - name: Wait for dev server
+        run: |
+          for ($i = 0; $i -lt 60; $i++) {
+            try {
+              Invoke-WebRequest -Uri http://localhost:1420 -UseBasicParsing -TimeoutSec 2 | Out-Null
+              Write-Output "dev server ready"
+              exit 0
+            } catch {
+              Start-Sleep -Seconds 2
+            }
+          }
+          Write-Output "dev server never came up"
+          exit 1
+
+      - name: Playwright tests
+        working-directory: apps/desktop
+        run: pnpm test:e2e
+
+      - name: Upload Playwright report
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: apps/desktop/playwright-report
+          retention-days: 14
