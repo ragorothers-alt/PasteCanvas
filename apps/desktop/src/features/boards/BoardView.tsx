@@ -242,11 +242,46 @@ export function BoardView({ board, onEnterBoard }: BoardViewProps) {
   const pendingMoves = useRef(new Map<string, { nodeId: string; x: number; y: number }>());
   const keyboardOrigins = useRef(new Map<string, { x: number; y: number }>());
   const persistTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Flush pending keyboard moves under the board they belong to. Called by
+  // the debounce timer, on unmount, and on board switch — never drop moves.
+  const flushKeyboardMoves = useCallback(
+    (targetBoardId: string) => {
+      if (persistTimer.current) {
+        clearTimeout(persistTimer.current);
+        persistTimer.current = null;
+      }
+      const batch = [...pendingMoves.current.values()];
+      pendingMoves.current.clear();
+      const prev = [...keyboardOrigins.current.entries()].map(([nodeId, pos]) => ({
+        nodeId,
+        x: pos.x,
+        y: pos.y,
+      }));
+      keyboardOrigins.current.clear();
+      if (batch.length > 0) {
+        void moveNodes(targetBoardId, batch);
+        push(createMoveCommand(targetBoardId, batch, prev));
+        for (const m of batch) {
+          originalPositions.current.set(m.nodeId, { x: m.x, y: m.y });
+        }
+      }
+    },
+    [push],
+  );
+
+  // Unmount / board switch: flush instead of dropping the debounce timer
+  // (moves were lost if the user navigated away within 400ms of an
+  // arrow-key move, and a stale timer could persist under the new board).
+  // flushKeyboardMoves is stable (only depends on the stable undo push),
+  // and flushing an empty queue is a no-op — StrictMode double-cleanup
+  // and effect re-runs are both safe.
   useEffect(() => {
+    const boardIdAtMount = board.id;
     return () => {
-      if (persistTimer.current) clearTimeout(persistTimer.current);
+      flushKeyboardMoves(boardIdAtMount);
     };
-  }, []);
+  }, [board.id, flushKeyboardMoves]);
 
   useEffect(() => {
     setBoard(board.id);
@@ -451,24 +486,13 @@ export function BoardView({ board, onEnterBoard }: BoardViewProps) {
         }
         pendingMoves.current.set(m.nodeId, m);
       }
-      // Debounced batch persist — no DB write per keystroke frame
+      // Debounced batch persist — no DB write per keystroke frame.
+      // The shared flush helper owns timer + maps, so unmount and board
+      // switches persist under the correct board id.
       if (persistTimer.current) clearTimeout(persistTimer.current);
       persistTimer.current = setTimeout(() => {
-        const batch = [...pendingMoves.current.values()];
-        pendingMoves.current.clear();
-        const prev = [...keyboardOrigins.current.entries()].map(([nodeId, pos]) => ({
-          nodeId,
-          x: pos.x,
-          y: pos.y,
-        }));
-        keyboardOrigins.current.clear();
-        if (batch.length > 0) {
-          void moveNodes(board.id, batch);
-          push(createMoveCommand(board.id, batch, prev));
-          for (const m of batch) {
-            originalPositions.current.set(m.nodeId, { x: m.x, y: m.y });
-          }
-        }
+        persistTimer.current = null;
+        flushKeyboardMoves(board.id);
       }, 400);
     };
     window.addEventListener("keydown", handler);
@@ -482,6 +506,7 @@ export function BoardView({ board, onEnterBoard }: BoardViewProps) {
     handleGroupSelected,
     handleUngroupSelected,
     push,
+    flushKeyboardMoves,
   ]);
 
   const handleNodesChange: OnNodesChange<CanvasNode> = useCallback(
