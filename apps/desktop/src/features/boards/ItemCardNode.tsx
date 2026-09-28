@@ -4,6 +4,7 @@ import { Camera, FileCode, FilePdf, Image, LinkSimple, LockSimple, LockSimpleOpe
 import { Handle, NodeResizer, Position, useReactFlow } from "@xyflow/react";
 import type { NodeProps } from "@xyflow/react";
 import type { CanvasNode, ItemCardData } from "../../adapters/canvas/CanvasMapper";
+import { shouldRenderPreview, useCanvasLOD } from "../../adapters/canvas/useCanvasLOD";
 import { getItemThumbnail } from "../inbox/api";
 import { resizeNodes, setNodeLocked } from "./api";
 import { useUndoStore, createResizeCommand } from "../../stores/undoStore";
@@ -58,9 +59,13 @@ export const ItemCardNode = memo(function ItemCardNode({ id, data, selected }: N
   const d = data as ItemCardData;
   const { setNodes, getNode } = useReactFlow<CanvasNode>();
   const { push } = useUndoStore();
+  // LOD: zoomed-out cards skip thumbnails + text previews (perf) — header
+  // and title always render so the canvas stays navigable at any zoom.
+  const detailLevel = useCanvasLOD();
+  const showPreview = shouldRenderPreview(detailLevel);
   const originalSize = useRef<{ width: number; height: number } | null>(null);
   const title = d.titleOverride ?? d.itemTitle ?? d.itemTextPreview ?? "（空白）";
-  const showThumb = THUMB_TYPES.has(d.itemType ?? "") && d.itemId != null;
+  const showThumb = showPreview && THUMB_TYPES.has(d.itemType ?? "") && d.itemId != null;
   const locked = d.locked === true;
 
   // Workstream F: capture the pre-resize size so the gesture is undoable.
@@ -131,7 +136,7 @@ export const ItemCardNode = memo(function ItemCardNode({ id, data, selected }: N
       </div>
       {showThumb && <CardThumbnail itemId={d.itemId as string} />}
       <div className="card-title">{title}</div>
-      {d.itemTextPreview && d.itemType !== "plain_text" && !showThumb && (
+      {showPreview && d.itemTextPreview && d.itemType !== "plain_text" && !showThumb && (
         <div className="card-preview">{d.itemTextPreview}</div>
       )}
       <Handle type="source" position={Position.Bottom} className="card-handle" />
