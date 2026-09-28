@@ -106,23 +106,29 @@ pub async fn empty_trash(state: State<'_, AppState>) -> Result<EmptyTrashDto, St
 
     // Physically remove orphaned asset files (SEC-002: checked resolution —
     // a hostile DB path must never delete files outside the store).
+    // File deletions run on the blocking pool.
     let asset_store = crate::infrastructure::asset_store::AssetStore::new(state.data_dir.clone());
-    let mut deleted_assets = 0i64;
-    for rel_path in &orphan_paths {
-        let path = match asset_store.resolve_path_checked(rel_path) {
-            Ok(p) => p,
-            Err(e) => {
-                tracing::warn!(event = "orphan_asset_path_rejected", error = %e);
-                continue;
-            }
-        };
-        match std::fs::remove_file(&path) {
-            Ok(()) => deleted_assets += 1,
-            Err(e) => {
-                tracing::warn!(event = "orphan_asset_remove_failed", path = %path.display(), error = %e);
+    let deleted_assets = tokio::task::spawn_blocking(move || {
+        let mut deleted = 0i64;
+        for rel_path in &orphan_paths {
+            let path = match asset_store.resolve_path_checked(rel_path) {
+                Ok(p) => p,
+                Err(e) => {
+                    tracing::warn!(event = "orphan_asset_path_rejected", error = %e);
+                    continue;
+                }
+            };
+            match std::fs::remove_file(&path) {
+                Ok(()) => deleted += 1,
+                Err(e) => {
+                    tracing::warn!(event = "orphan_asset_remove_failed", path = %path.display(), error = %e);
+                }
             }
         }
-    }
+        deleted
+    })
+    .await
+    .unwrap_or(0);
 
     tracing::info!(
         event = "trash_emptied",
@@ -175,23 +181,17 @@ pub async fn batch_archive_in_pool(
         return Ok(0);
     }
     let now = chrono::Utc::now().timestamp_millis();
-    let mut tx = pool.begin().await.map_err(|e| e.to_string())?;
-    let mut affected = 0u64;
-
+    let placeholders = vec!["?"; item_ids.len()].join(", ");
+    let sql = format!(
+        "UPDATE items SET inbox_status = 'archived', updated_at = ?, revision = revision + 1
+         WHERE id IN ({placeholders}) AND deleted_at IS NULL"
+    );
+    let mut query = sqlx::query(&sql).bind(now);
     for id in item_ids {
-        let result = sqlx::query(
-            "UPDATE items SET inbox_status = 'archived', updated_at = ?, revision = revision + 1 WHERE id = ? AND deleted_at IS NULL",
-        )
-        .bind(now)
-        .bind(id)
-        .execute(&mut *tx)
-        .await
-        .map_err(|e| e.to_string())?;
-        affected += result.rows_affected();
+        query = query.bind(id);
     }
-
-    tx.commit().await.map_err(|e| e.to_string())?;
-    Ok(affected)
+    let result = query.execute(pool).await.map_err(|e| e.to_string())?;
+    Ok(result.rows_affected())
 }
 
 /// Batch delete (soft) multiple items.
@@ -208,24 +208,17 @@ pub async fn batch_trash_in_pool(
         return Ok(0);
     }
     let now = chrono::Utc::now().timestamp_millis();
-    let mut tx = pool.begin().await.map_err(|e| e.to_string())?;
-    let mut affected = 0u64;
-
+    let placeholders = vec!["?"; item_ids.len()].join(", ");
+    let sql = format!(
+        "UPDATE items SET deleted_at = ?, updated_at = ?, revision = revision + 1
+         WHERE id IN ({placeholders}) AND deleted_at IS NULL"
+    );
+    let mut query = sqlx::query(&sql).bind(now).bind(now);
     for id in item_ids {
-        let result = sqlx::query(
-            "UPDATE items SET deleted_at = ?, updated_at = ?, revision = revision + 1 WHERE id = ? AND deleted_at IS NULL",
-        )
-        .bind(now)
-        .bind(now)
-        .bind(id)
-        .execute(&mut *tx)
-        .await
-        .map_err(|e| e.to_string())?;
-        affected += result.rows_affected();
+        query = query.bind(id);
     }
-
-    tx.commit().await.map_err(|e| e.to_string())?;
-    Ok(affected)
+    let result = query.execute(pool).await.map_err(|e| e.to_string())?;
+    Ok(result.rows_affected())
 }
 
 /// INB-003: reveals an item's managed asset in the OS file explorer.
@@ -489,21 +482,25 @@ pub async fn get_item_asset_base64(
     }
 
     // Read the content-addressed asset file (SEC-002: checked resolution —
-    // a hostile DB path must never read files outside the store).
+    // a hostile DB path must never read files outside the store). The file
+    // read + base64 encode run on the blocking pool (assets can be large).
     let asset_store = crate::infrastructure::asset_store::AssetStore::new(state.data_dir.clone());
     let path = asset_store
         .resolve_path_checked(&asset.relative_path)
         .map_err(|e| e.to_string())?;
-    let bytes = std::fs::read(&path).map_err(|e| format!("read asset: {e}"))?;
-
-    use base64::Engine;
-    let data_base64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
-
-    Ok(AssetDataDto {
-        mime_type: asset.mime_type,
-        data_base64,
-        byte_size: asset.byte_size,
+    let mime_type = asset.mime_type.clone();
+    let byte_size = asset.byte_size;
+    tokio::task::spawn_blocking(move || -> Result<AssetDataDto, String> {
+        let bytes = std::fs::read(&path).map_err(|e| format!("read asset: {e}"))?;
+        use base64::Engine;
+        Ok(AssetDataDto {
+            mime_type,
+            data_base64: base64::engine::general_purpose::STANDARD.encode(&bytes),
+            byte_size,
+        })
     })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 /// Maximum source size we are willing to decode for thumbnail generation.
@@ -552,54 +549,62 @@ pub async fn get_item_thumbnail(
     let variant_path = store
         .resolve_variant_path_checked(&variant_rel)
         .map_err(|e| e.to_string())?;
-
-    // Cached variant? Serve it directly.
-    if variant_path.exists() {
-        let bytes = std::fs::read(&variant_path).map_err(|e| format!("read variant: {e}"))?;
-        use base64::Engine;
-        return Ok(AssetDataDto {
-            mime_type: "image/png".to_string(),
-            data_base64: base64::engine::general_purpose::STANDARD.encode(&bytes),
-            byte_size: bytes.len() as i64,
-        });
-    }
-
-    if asset.byte_size > MAX_THUMB_SOURCE_BYTES {
-        return Err("source too large to thumbnail".to_string());
-    }
-
     let src_path = store
         .resolve_path_checked(&asset.relative_path)
         .map_err(|e| e.to_string())?;
-    let bytes = std::fs::read(&src_path).map_err(|e| format!("read asset: {e}"))?;
 
-    let thumb = match crate::infrastructure::thumbnail::downscale_png(&bytes, max_dim) {
-        Ok(t) => t,
-        Err(_) => {
-            // Already small (or not PNG-decodable): fall back to the original
-            // when it is small enough to serve as its own thumbnail.
-            if asset.byte_size <= MAX_THUMB_FALLBACK_BYTES {
-                use base64::Engine;
-                return Ok(AssetDataDto {
-                    mime_type: asset.mime_type,
-                    data_base64: base64::engine::general_purpose::STANDARD.encode(&bytes),
-                    byte_size: asset.byte_size,
-                });
-            }
-            return Err("thumbnail not available for this asset".to_string());
+    // Heavy work (cache check/read, PNG decode + downscale + encode, cache
+    // write) runs on the blocking pool — inbox lists request many thumbnails
+    // and must not stall the async runtime.
+    let source_byte_size = asset.byte_size;
+    let source_mime = asset.mime_type.clone();
+    tokio::task::spawn_blocking(move || -> Result<AssetDataDto, String> {
+        use base64::Engine;
+
+        // Cached variant? Serve it directly.
+        if variant_path.exists() {
+            let bytes = std::fs::read(&variant_path).map_err(|e| format!("read variant: {e}"))?;
+            return Ok(AssetDataDto {
+                mime_type: "image/png".to_string(),
+                data_base64: base64::engine::general_purpose::STANDARD.encode(&bytes),
+                byte_size: bytes.len() as i64,
+            });
         }
-    };
 
-    // Cache the variant (best effort; the store dir may not exist yet).
-    if let Some(parent) = variant_path.parent() {
-        let _ = std::fs::create_dir_all(parent);
-    }
-    let _ = std::fs::write(&variant_path, &thumb);
+        if source_byte_size > MAX_THUMB_SOURCE_BYTES {
+            return Err("source too large to thumbnail".to_string());
+        }
 
-    use base64::Engine;
-    Ok(AssetDataDto {
-        mime_type: "image/png".to_string(),
-        data_base64: base64::engine::general_purpose::STANDARD.encode(&thumb),
-        byte_size: thumb.len() as i64,
+        let bytes = std::fs::read(&src_path).map_err(|e| format!("read asset: {e}"))?;
+
+        let thumb = match crate::infrastructure::thumbnail::downscale_png(&bytes, max_dim) {
+            Ok(t) => t,
+            Err(_) => {
+                // Already small (or not PNG-decodable): fall back to the original
+                // when it is small enough to serve as its own thumbnail.
+                if source_byte_size <= MAX_THUMB_FALLBACK_BYTES {
+                    return Ok(AssetDataDto {
+                        mime_type: source_mime,
+                        data_base64: base64::engine::general_purpose::STANDARD.encode(&bytes),
+                        byte_size: source_byte_size,
+                    });
+                }
+                return Err("thumbnail not available for this asset".to_string());
+            }
+        };
+
+        // Cache the variant (best effort; the store dir may not exist yet).
+        if let Some(parent) = variant_path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        let _ = std::fs::write(&variant_path, &thumb);
+
+        Ok(AssetDataDto {
+            mime_type: "image/png".to_string(),
+            data_base64: base64::engine::general_purpose::STANDARD.encode(&thumb),
+            byte_size: thumb.len() as i64,
+        })
     })
+    .await
+    .map_err(|e| e.to_string())?
 }

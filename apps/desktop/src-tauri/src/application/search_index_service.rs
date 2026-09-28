@@ -128,11 +128,24 @@ impl SearchIndexService {
         )
         .collect();
 
-        // Resolve tags_text while no transaction holds the connection.
-        let mut tags_texts: Vec<String> = Vec::with_capacity(rows.len());
-        for row in &rows {
-            tags_texts.push(tags_text_for(pool, &row.item_id).await?);
-        }
+        // Resolve all tags_text in one grouped query (no per-item round trip).
+        let tag_rows: Vec<(String, String)> = sqlx::query_as(
+            "SELECT item_id, GROUP_CONCAT(name, ' ') AS tags_text FROM (
+                 SELECT it.item_id AS item_id, t.name AS name
+                 FROM tags t
+                 JOIN item_tags it ON it.tag_id = t.id
+                 WHERE t.deleted_at IS NULL
+                 ORDER BY it.item_id, t.name)
+             GROUP BY item_id",
+        )
+        .fetch_all(pool)
+        .await?;
+        let tags_by_item: std::collections::HashMap<String, String> =
+            tag_rows.into_iter().collect();
+        let tags_texts: Vec<String> = rows
+            .iter()
+            .map(|r| tags_by_item.get(&r.item_id).cloned().unwrap_or_default())
+            .collect();
 
         // Write phase: single atomic transaction.
         let mut tx = pool.begin().await?;
@@ -205,24 +218,6 @@ impl SearchIndexService {
             .await?;
         Ok(())
     }
-}
-
-/// Concatenated tag names for an item (same format as update_tags_text_for_item).
-async fn tags_text_for(pool: &sqlx::SqlitePool, item_id: &str) -> Result<String, sqlx::Error> {
-    let tags: Vec<(String,)> = sqlx::query_as(
-        "SELECT t.name FROM tags t
-         JOIN item_tags it ON it.tag_id = t.id
-         WHERE it.item_id = ? AND t.deleted_at IS NULL
-         ORDER BY t.name",
-    )
-    .bind(item_id)
-    .fetch_all(pool)
-    .await?;
-    Ok(tags
-        .into_iter()
-        .map(|(name,)| name)
-        .collect::<Vec<_>>()
-        .join(" "))
 }
 
 /// FTS5 self-check: the 'integrity-check' command fails if the index is corrupt.

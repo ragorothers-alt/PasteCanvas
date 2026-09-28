@@ -1,7 +1,9 @@
 use serde::Deserialize;
 use tauri::State;
 
-use crate::application::board_service::{BoardService, BoardSnapshotDto, BoardSummaryDto};
+use crate::application::board_service::{
+    BoardService, BoardSnapshotDto, BoardSummaryDto, TrashedEntryDto,
+};
 use crate::bootstrap::app_state::AppState;
 
 #[derive(Debug, Deserialize)]
@@ -60,6 +62,24 @@ pub async fn create_board(
 pub async fn list_boards(state: State<'_, AppState>) -> Result<Vec<BoardSummaryDto>, String> {
     let svc = BoardService::new(state.db.clone(), state.device_id.clone());
     svc.list_boards().await.map_err(|e| e.to_string())
+}
+
+/// Trashed boards for the Trash view restore section.
+#[tauri::command]
+pub async fn list_trashed_boards(
+    state: State<'_, AppState>,
+) -> Result<Vec<TrashedEntryDto>, String> {
+    let svc = BoardService::new(state.db.clone(), state.device_id.clone());
+    svc.list_trashed_boards().await.map_err(|e| e.to_string())
+}
+
+/// Trashed folders for the Trash view restore section.
+#[tauri::command]
+pub async fn list_trashed_folders(
+    state: State<'_, AppState>,
+) -> Result<Vec<TrashedEntryDto>, String> {
+    let svc = BoardService::new(state.db.clone(), state.device_id.clone());
+    svc.list_trashed_folders().await.map_err(|e| e.to_string())
 }
 
 /// BRD-007: most recently used boards for the sidebar "Recent" section.

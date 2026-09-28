@@ -113,7 +113,7 @@ async fn finish_session_on_quit(app: &AppHandle) {
 
 /// Reads the current clipboard and captures whatever format is present.
 async fn save_clipboard_from_tray(app: AppHandle) {
-    let payload = crate::platform::clipboard::snapshot_clipboard(&app);
+    let payload = crate::platform::clipboard::snapshot_clipboard_async(app.clone()).await;
     crate::platform::clipboard_persist::persist_and_emit(
         &app,
         payload,

@@ -208,18 +208,6 @@ pub fn capture_region(_rx: i32, _ry: i32, _rw: i32, _rh: i32) -> Result<Vec<u8>,
     Err("screenshot capture only supported on Windows".to_string())
 }
 
-/// Captures the entire virtual screen (all monitors) as PNG.
-#[cfg(target_os = "windows")]
-pub fn capture_screen() -> Result<Vec<u8>, String> {
-    let vs = get_virtual_screen()?;
-    capture_region(vs.x, vs.y, vs.width, vs.height)
-}
-
-#[cfg(not(target_os = "windows"))]
-pub fn capture_screen() -> Result<Vec<u8>, String> {
-    Err("screenshot capture only supported on Windows".to_string())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -7,36 +7,14 @@
 //! Per PRD CAP-008: "使用 Manifest V3 + Native Messaging，不要求雲端服務."
 
 use pastecanvas_desktop_lib::application::capture_service::{CaptureService, CaptureTextRequest};
+use pastecanvas_desktop_lib::bootstrap::external;
 use pastecanvas_desktop_lib::domain::entities::item::CaptureMethod;
 use pastecanvas_desktop_lib::domain::value_objects::EntityId;
-use pastecanvas_desktop_lib::infrastructure::database::migrator;
-use pastecanvas_desktop_lib::infrastructure::database::pool::AppDatabase;
 use pastecanvas_desktop_lib::platform::native_messaging::{
     BrowserCaptureRequest, BrowserCaptureResponse, read_message, validate_capture_request,
     write_message,
 };
 use std::io::{self, BufReader};
-use std::path::{Path, PathBuf};
-
-/// Tauri bundle identifier — must match tauri.conf.json so the NMH opens the same DB.
-const APP_IDENTIFIER: &str = "com.pastecanvas.desktop";
-const DB_FILENAME: &str = "pastecanvas.sqlite3";
-
-/// Resolves the app data directory (matches Tauri's app_data_dir layout).
-fn resolve_data_dir() -> Option<PathBuf> {
-    #[cfg(target_os = "windows")]
-    {
-        std::env::var("APPDATA")
-            .ok()
-            .map(|p| PathBuf::from(p).join(APP_IDENTIFIER))
-    }
-    #[cfg(not(target_os = "windows"))]
-    {
-        std::env::var("HOME")
-            .ok()
-            .map(|p| PathBuf::from(p).join(".local/share").join(APP_IDENTIFIER))
-    }
-}
 
 /// Maps a browser capture request to the text content to persist.
 fn content_for_request(req: &BrowserCaptureRequest) -> Option<String> {
@@ -54,19 +32,6 @@ fn content_for_request(req: &BrowserCaptureRequest) -> Option<String> {
 }
 
 fn main() {
-    let data_dir = match resolve_data_dir() {
-        Some(d) => d,
-        None => {
-            respond_error(&mut io::stdout().lock(), "cannot resolve app data dir");
-            return;
-        }
-    };
-    if let Err(e) = std::fs::create_dir_all(&data_dir) {
-        respond_error(&mut io::stdout().lock(), &format!("create data dir: {e}"));
-        return;
-    }
-    let db_path = data_dir.join(DB_FILENAME);
-
     let stdin = io::stdin();
     let mut reader = BufReader::new(stdin.lock());
     let stdout = io::stdout();
@@ -82,7 +47,7 @@ fn main() {
             }
         };
 
-        let response = process_message(&msg, &db_path);
+        let response = process_message(&msg);
         let payload = serde_json::to_vec(&response).unwrap_or_default();
         let mut out = stdout.lock();
         if let Err(e) = write_message(&mut out, &payload) {
@@ -93,7 +58,7 @@ fn main() {
 }
 
 /// Processes a single capture message, returning the response.
-fn process_message(msg: &[u8], db_path: &Path) -> BrowserCaptureResponse {
+fn process_message(msg: &[u8]) -> BrowserCaptureResponse {
     let req: BrowserCaptureRequest = match serde_json::from_slice(msg) {
         Ok(r) => r,
         Err(e) => {
@@ -146,12 +111,7 @@ fn process_message(msg: &[u8], db_path: &Path) -> BrowserCaptureResponse {
     };
 
     let result: Result<String, String> = rt.block_on(async {
-        let db = AppDatabase::open(db_path)
-            .await
-            .map_err(|e| format!("open db: {e}"))?;
-        migrator::run_migrations(db.pool())
-            .await
-            .map_err(|e| format!("migrations: {e}"))?;
+        let (db, _data_dir) = external::open_migrated_db().await?;
         let svc = CaptureService::new(db, EntityId::new());
         let captured = svc
             .capture_text(CaptureTextRequest {

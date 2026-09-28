@@ -98,4 +98,63 @@ mod tests {
         assert_eq!(r2, 0);
         assert!(svc.verify().await.expect("verify").is_healthy());
     }
+
+    #[tokio::test]
+    async fn rebuild_restores_tags_text() {
+        let db = setup().await;
+        let id = capture(&db, "tagged item content").await;
+        let id2 = capture(&db, "untagged item content").await;
+
+        // Attach two tags to the first item (same rows commands/tags.rs writes).
+        let now = 1_700_000_000_000i64;
+        for (tid, name) in [("tag-1", "alpha"), ("tag-2", "beta")] {
+            sqlx::query(
+                "INSERT INTO tags (id, name, normalized_name, created_at, updated_at)
+                 VALUES (?, ?, ?, ?, ?)",
+            )
+            .bind(tid)
+            .bind(name)
+            .bind(name)
+            .bind(now)
+            .bind(now)
+            .execute(db.pool())
+            .await
+            .expect("insert tag");
+            sqlx::query("INSERT INTO item_tags (item_id, tag_id, created_at) VALUES (?, ?, ?)")
+                .bind(&id)
+                .bind(tid)
+                .bind(now)
+                .execute(db.pool())
+                .await
+                .expect("insert item_tag");
+        }
+
+        // Corrupt the index: both documents disappear.
+        sqlx::query("DELETE FROM search_documents")
+            .execute(db.pool())
+            .await
+            .expect("corrupt");
+
+        let svc = SearchIndexService::new(db.clone());
+        let (rebuilt, _) = svc.rebuild().await.expect("rebuild");
+        assert_eq!(rebuilt, 2);
+
+        // Tagged item gets its tags_text back (alphabetical, space-joined).
+        let tags_text: (String,) =
+            sqlx::query_as("SELECT tags_text FROM search_documents WHERE item_id = ?")
+                .bind(&id)
+                .fetch_one(db.pool())
+                .await
+                .expect("tagged doc");
+        assert_eq!(tags_text.0, "alpha beta");
+
+        // Untagged item rebuilds with an empty tags_text.
+        let empty_tags: (String,) =
+            sqlx::query_as("SELECT tags_text FROM search_documents WHERE item_id = ?")
+                .bind(&id2)
+                .fetch_one(db.pool())
+                .await
+                .expect("untagged doc");
+        assert_eq!(empty_tags.0, "");
+    }
 }

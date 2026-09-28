@@ -160,8 +160,9 @@ fn start_clipboard_watcher(
                 _ => return,
             };
 
-            // 5. Read + capture (content only enters here, after all gates)
-            let payload = crate::platform::clipboard::snapshot_clipboard(&app_h);
+            // 5. Read + capture (content only enters here, after all gates;
+            //    clipboard read + PNG encoding run on the blocking pool)
+            let payload = crate::platform::clipboard::snapshot_clipboard_async(app_h.clone()).await;
             if matches!(payload, crate::platform::clipboard::ClipboardPayload::Empty) {
                 return;
             }

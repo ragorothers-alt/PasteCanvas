@@ -31,6 +31,7 @@ fn nmh_exe_path() -> Result<std::path::PathBuf, String> {
 /// Registers the native messaging host for Chrome and Edge.
 /// Writes the host manifest JSON into the app data dir, then creates registry
 /// entries for both browsers pointing to it.
+/// File write + reg.exe spawns run on the blocking pool.
 #[tauri::command]
 pub async fn register_browser_host(
     state: State<'_, AppState>,
@@ -43,71 +44,81 @@ pub async fn register_browser_host(
         );
     }
 
-    let nmh_path = nmh_exe_path()?;
-    if !nmh_path.exists() {
-        return Err(format!(
-            "native messaging host not found at {}",
-            nmh_path.display()
-        ));
-    }
-
-    // Write the NMH manifest JSON
-    let manifest = serde_json::json!({
-        "name": NMH_NAME,
-        "description": "PasteCanvas local capture host",
-        "path": nmh_path.to_string_lossy(),
-        "type": "stdio",
-        "allowed_origins": [request.extension_origin.trim()]
-    });
-
-    let manifest_path = state.data_dir.join("nmh-manifest.json");
-    std::fs::write(
-        &manifest_path,
-        serde_json::to_string_pretty(&manifest).map_err(|e| e.to_string())?,
-    )
-    .map_err(|e| format!("write manifest: {e}"))?;
-
-    // Register for Chrome and Edge via the registry (Windows)
-    #[cfg(target_os = "windows")]
-    {
-        use crate::platform::windows::reg;
-        let manifest_str = manifest_path.display().to_string();
-        let browsers = [
-            r"HKCU\Software\Google\Chrome\NativeMessagingHosts",
-            r"HKCU\Software\Microsoft\Edge\NativeMessagingHosts",
-        ];
-        for base in browsers {
-            let key = format!("{base}\\{NMH_NAME}");
-            reg::add_default(&key, &manifest_str)?;
+    let data_dir = state.data_dir.clone();
+    let origin = request.extension_origin.trim().to_string();
+    tokio::task::spawn_blocking(move || -> Result<(), String> {
+        let nmh_path = nmh_exe_path()?;
+        if !nmh_path.exists() {
+            return Err(format!(
+                "native messaging host not found at {}",
+                nmh_path.display()
+            ));
         }
-    }
 
-    #[cfg(not(target_os = "windows"))]
-    {
-        return Err("browser host registration is only supported on Windows".to_string());
-    }
+        // Write the NMH manifest JSON
+        let manifest = serde_json::json!({
+            "name": NMH_NAME,
+            "description": "PasteCanvas local capture host",
+            "path": nmh_path.to_string_lossy(),
+            "type": "stdio",
+            "allowed_origins": [origin]
+        });
 
-    tracing::info!(event = "browser_host_registered", nmh = %nmh_path.display());
-    Ok(())
+        let manifest_path = data_dir.join("nmh-manifest.json");
+        std::fs::write(
+            &manifest_path,
+            serde_json::to_string_pretty(&manifest).map_err(|e| e.to_string())?,
+        )
+        .map_err(|e| format!("write manifest: {e}"))?;
+
+        // Register for Chrome and Edge via the registry (Windows)
+        #[cfg(target_os = "windows")]
+        {
+            use crate::platform::windows::reg;
+            let manifest_str = manifest_path.display().to_string();
+            let browsers = [
+                r"HKCU\Software\Google\Chrome\NativeMessagingHosts",
+                r"HKCU\Software\Microsoft\Edge\NativeMessagingHosts",
+            ];
+            for base in browsers {
+                let key = format!("{base}\\{NMH_NAME}");
+                reg::add_default(&key, &manifest_str)?;
+            }
+        }
+
+        #[cfg(not(target_os = "windows"))]
+        {
+            return Err("browser host registration is only supported on Windows".to_string());
+        }
+
+        tracing::info!(event = "browser_host_registered", nmh = %nmh_path.display());
+        Ok(())
+    })
+    .await
+    .map_err(|e| format!("browser host registration task aborted: {e}"))?
 }
 
 /// Unregisters the native messaging host for Chrome and Edge.
 #[tauri::command]
 pub async fn unregister_browser_host() -> Result<(), String> {
-    #[cfg(target_os = "windows")]
-    {
-        use crate::platform::windows::reg;
-        let browsers = [
-            r"HKCU\Software\Google\Chrome\NativeMessagingHosts",
-            r"HKCU\Software\Microsoft\Edge\NativeMessagingHosts",
-        ];
-        for base in browsers {
-            let key = format!("{base}\\{NMH_NAME}");
-            reg::delete_key(&key)?;
+    tokio::task::spawn_blocking(|| -> Result<(), String> {
+        #[cfg(target_os = "windows")]
+        {
+            use crate::platform::windows::reg;
+            let browsers = [
+                r"HKCU\Software\Google\Chrome\NativeMessagingHosts",
+                r"HKCU\Software\Microsoft\Edge\NativeMessagingHosts",
+            ];
+            for base in browsers {
+                let key = format!("{base}\\{NMH_NAME}");
+                reg::delete_key(&key)?;
+            }
         }
-    }
-    tracing::info!(event = "browser_host_unregistered");
-    Ok(())
+        tracing::info!(event = "browser_host_unregistered");
+        Ok(())
+    })
+    .await
+    .map_err(|e| format!("browser host unregistration task aborted: {e}"))?
 }
 
 /// Chrome IDs are 32 chars in a–p. Firefox addon origins use a UUID.

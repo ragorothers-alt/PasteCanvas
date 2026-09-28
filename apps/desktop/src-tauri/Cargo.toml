@@ -19,12 +19,10 @@ tauri-plugin-single-instance = { workspace = true }
 tauri-plugin-global-shortcut = { workspace = true }
 tauri-plugin-clipboard-manager = { workspace = true }
 tokio = { workspace = true }
-async-trait = { workspace = true }
 sqlx = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
-anyhow = { workspace = true }
 uuid = { workspace = true }
 chrono = { workspace = true }
 sha2 = { workspace = true }

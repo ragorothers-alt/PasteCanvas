@@ -14,5 +14,3 @@ crate-type = ["cdylib"]
 [dependencies]
 windows = { workspace = true }
 windows-core = { workspace = true }
-
-[dev-dependencies]

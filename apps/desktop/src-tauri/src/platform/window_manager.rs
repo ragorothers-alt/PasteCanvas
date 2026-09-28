@@ -129,14 +129,6 @@ pub fn toggle_always_on_top(app: &tauri::AppHandle) -> Result<bool, String> {
     Ok(new_state)
 }
 
-/// Gets the current always-on-top state of the main window.
-pub fn get_always_on_top(app: &tauri::AppHandle) -> Result<bool, String> {
-    let window = app
-        .get_webview_window("main")
-        .ok_or("main window not found")?;
-    window.is_always_on_top().map_err(|e| e.to_string())
-}
-
 /// Shows and focuses the main window.
 pub fn show_main_window(app: &tauri::AppHandle) -> Result<(), String> {
     if let Some(window) = app.get_webview_window("main") {
@@ -145,14 +137,6 @@ pub fn show_main_window(app: &tauri::AppHandle) -> Result<(), String> {
         }
         window.show().map_err(|e| e.to_string())?;
         window.set_focus().map_err(|e| e.to_string())?;
-    }
-    Ok(())
-}
-
-/// Hides the main window to tray.
-pub fn hide_main_window(app: &tauri::AppHandle) -> Result<(), String> {
-    if let Some(window) = app.get_webview_window("main") {
-        window.hide().map_err(|e| e.to_string())?;
     }
     Ok(())
 }

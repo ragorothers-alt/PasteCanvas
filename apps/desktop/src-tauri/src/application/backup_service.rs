@@ -101,16 +101,25 @@ impl BackupService {
         let db_backup_path = backup_dir.join("pastecanvas.sqlite3");
         let vacuum_sql = vacuum_into_sql(&db_backup_path);
         sqlx::query(&vacuum_sql).execute(self.db.pool()).await?;
-        let db_sha256 = sha256_file(&db_backup_path)?;
 
-        // Copy assets
+        // Heavy file work (DB hash + recursive asset copy, potentially
+        // hundreds of MB) runs on the blocking pool.
         let assets_src = self.data_dir.join("assets");
-        let assets_dst = backup_dir.join("assets");
-        let asset_count = if assets_src.exists() {
-            copy_dir_recursive(&assets_src, &assets_dst)?
-        } else {
-            0
-        };
+        let db_hash_path = db_backup_path.clone();
+        let backup_dir_for_copy = backup_dir.clone();
+        let (db_sha256, asset_count) =
+            tokio::task::spawn_blocking(move || -> Result<(String, u64), BackupError> {
+                let db_sha256 = sha256_file(&db_hash_path)?;
+                let assets_dst = backup_dir_for_copy.join("assets");
+                let asset_count = if assets_src.exists() {
+                    copy_dir_recursive(&assets_src, &assets_dst)?
+                } else {
+                    0
+                };
+                Ok((db_sha256, asset_count))
+            })
+            .await
+            .map_err(|e| std::io::Error::other(format!("backup task aborted: {e}")))??;
 
         // Count items
         let item_count: (i64,) =
@@ -157,8 +166,6 @@ impl BackupService {
             .data_dir
             .join("exports")
             .join(format!("export_{}", timestamp));
-        std::fs::create_dir_all(export_dir.join("items"))?;
-        std::fs::create_dir_all(export_dir.join("boards"))?;
 
         // Export items as JSON
         #[derive(sqlx::FromRow)]
@@ -176,54 +183,67 @@ impl BackupService {
         .fetch_all(self.db.pool())
         .await?;
 
-        // Write each item as markdown
-        for item in &items {
-            let filename = format!("{}.md", item.id);
-            let content = format!(
-                "# {}\n\n- Type: {}\n- Created: {}\n\n---\n\n{}\n",
-                item.title.as_deref().unwrap_or("(untitled)"),
-                item.item_type,
-                item.created_at,
-                item.plain_text.as_deref().unwrap_or(""),
-            );
-            std::fs::write(export_dir.join("items").join(filename), content)?;
-        }
-
-        // Export boards
         let boards: Vec<(String, String)> =
             sqlx::query_as("SELECT id, name FROM boards WHERE deleted_at IS NULL")
                 .fetch_all(self.db.pool())
                 .await?;
 
-        for (id, name) in &boards {
-            let filename = format!("{}.md", sanitize_filename(name));
-            let content = format!("# Board: {}\n\nID: {}\n", name, id);
-            std::fs::write(export_dir.join("boards").join(filename), content)?;
-        }
+        // All file writes (one per item/board + manifest) run on the blocking
+        // pool — thousands of synchronous writes must not stall the runtime.
+        let created_at = now.as_millis();
+        let export_dir_for_writes = export_dir.clone();
+        let (item_count, board_count) =
+            tokio::task::spawn_blocking(move || -> Result<(i64, i64), BackupError> {
+                std::fs::create_dir_all(export_dir_for_writes.join("items"))?;
+                std::fs::create_dir_all(export_dir_for_writes.join("boards"))?;
 
-        // Write export manifest
-        let manifest = serde_json::json!({
-            "version": 1,
-            "format": "json+markdown",
-            "createdAt": now.as_millis(),
-            "itemCount": items.len(),
-            "boardCount": boards.len(),
-        });
-        std::fs::write(
-            export_dir.join("manifest.json"),
-            serde_json::to_string_pretty(&manifest)?,
-        )?;
+                for item in &items {
+                    let filename = format!("{}.md", item.id);
+                    let content = format!(
+                        "# {}\n\n- Type: {}\n- Created: {}\n\n---\n\n{}\n",
+                        item.title.as_deref().unwrap_or("(untitled)"),
+                        item.item_type,
+                        item.created_at,
+                        item.plain_text.as_deref().unwrap_or(""),
+                    );
+                    std::fs::write(export_dir_for_writes.join("items").join(filename), content)?;
+                }
 
-        tracing::info!(
-            event = "export_created",
-            path = %export_dir.display(),
-            item_count = items.len(),
-        );
+                for (id, name) in &boards {
+                    let filename = format!("{}.md", sanitize_filename(name));
+                    let content = format!("# Board: {}\n\nID: {}\n", name, id);
+                    std::fs::write(export_dir_for_writes.join("boards").join(filename), content)?;
+                }
+
+                let manifest = serde_json::json!({
+                    "version": 1,
+                    "format": "json+markdown",
+                    "createdAt": created_at,
+                    "itemCount": items.len(),
+                    "boardCount": boards.len(),
+                });
+                std::fs::write(
+                    export_dir_for_writes.join("manifest.json"),
+                    serde_json::to_string_pretty(&manifest)?,
+                )?;
+
+                tracing::info!(
+                    event = "export_created",
+                    path = %export_dir_for_writes.display(),
+                    item_count = items.len(),
+                );
+
+                Ok((items.len() as i64, boards.len() as i64))
+            })
+            .await
+            .map_err(|e| {
+                BackupError::Io(std::io::Error::other(format!("export task aborted: {e}")))
+            })??;
 
         Ok(ExportResultDto {
             export_path: export_dir.display().to_string(),
-            item_count: items.len() as i64,
-            board_count: boards.len() as i64,
+            item_count,
+            board_count,
             created_at: now.as_millis(),
         })
     }

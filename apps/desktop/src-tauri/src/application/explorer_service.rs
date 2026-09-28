@@ -8,7 +8,7 @@
 use crate::domain::entities::item::{CaptureMethod, InboxStatus, Item};
 use crate::domain::value_objects::{EntityId, ItemType, UnixMs};
 use crate::infrastructure::asset_store::{AssetStore, MediaKind};
-use crate::infrastructure::database::pool::AppDatabase;
+use crate::infrastructure::database::pool::{AppDatabase, CapturedAssetInsert};
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -87,15 +87,21 @@ impl ExplorerCaptureService {
             .map(|f| f.to_string_lossy().to_string())
             .unwrap_or_else(|| "file".to_string());
 
-        // Read and stage into the content-addressed store (atomic, dedup)
-        let bytes = std::fs::read(file_path)?;
+        // Read and stage into the content-addressed store (atomic, dedup).
+        // Both the file read and the hashing/write run on the blocking pool.
+        let path_owned = file_path.to_path_buf();
+        let bytes = tokio::task::spawn_blocking(move || std::fs::read(path_owned))
+            .await
+            .map_err(|e| ExplorerCaptureError::Asset(e.to_string()))?
+            .map_err(ExplorerCaptureError::Io)?;
         let asset_store = AssetStore::new(self.data_dir.clone());
         // Ensure the store directory structure exists (idempotent)
         asset_store
             .initialize()
             .map_err(|e| ExplorerCaptureError::Asset(e.to_string()))?;
         let staged = asset_store
-            .stage_bytes(&bytes, Some(&filename))
+            .stage_bytes_async(bytes, Some(filename.clone()))
+            .await
             .map_err(|e| ExplorerCaptureError::Asset(e.to_string()))?;
 
         let now = UnixMs::now();
@@ -127,21 +133,21 @@ impl ExplorerCaptureService {
 
         // Transaction: item + asset + link + search document
         self.db
-            .insert_captured_asset_item(
-                item.id.as_str(),
-                item.item_type.as_str(),
-                &title,
-                "explorer",
-                self.device_id.as_str(),
-                now.as_millis(),
-                &staged.sha256,
-                staged.media_kind.as_str(),
-                &staged.mime_type,
-                staged.byte_size as i64,
-                &staged.relative_path,
-                "explorer",
-                &filename,
-            )
+            .insert_captured_asset_item(&CapturedAssetInsert {
+                item_id: item.id.as_str(),
+                item_type: item.item_type.as_str(),
+                title: &title,
+                capture_method: "explorer",
+                device_id: self.device_id.as_str(),
+                now_ms: now.as_millis(),
+                sha256: &staged.sha256,
+                media_kind: staged.media_kind.as_str(),
+                mime_type: &staged.mime_type,
+                byte_size: staged.byte_size as i64,
+                relative_path: &staged.relative_path,
+                source_app: "explorer",
+                filename: &filename,
+            })
             .await?;
 
         tracing::info!(

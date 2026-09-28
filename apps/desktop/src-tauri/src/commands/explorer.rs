@@ -24,67 +24,76 @@ fn explorer_exe_path() -> Result<std::path::PathBuf, String> {
 }
 
 /// Registers Explorer context-menu entries ("Send to Inbox" + "Send to last Board").
+/// reg.exe spawns run on the blocking pool.
 #[tauri::command]
 pub async fn register_explorer_integration(_state: State<'_, AppState>) -> Result<(), String> {
-    let exe = explorer_exe_path()?;
-    if !exe.exists() {
-        return Err(format!("explorer bridge not found at {}", exe.display()));
-    }
-    let exe_str = exe.display().to_string();
+    tokio::task::spawn_blocking(|| -> Result<(), String> {
+        let exe = explorer_exe_path()?;
+        if !exe.exists() {
+            return Err(format!("explorer bridge not found at {}", exe.display()));
+        }
+        let exe_str = exe.display().to_string();
 
-    #[cfg(target_os = "windows")]
-    {
-        use crate::platform::windows::reg;
+        #[cfg(target_os = "windows")]
+        {
+            use crate::platform::windows::reg;
 
-        // "Send to PasteCanvas Inbox" — all files
-        let inbox_key = format!(r"HKCR\*\shell\{MENU_INBOX}");
-        reg::add_default(&inbox_key, "Send to PasteCanvas Inbox")?;
-        let inbox_cmd = format!(r"HKCR\*\shell\{MENU_INBOX}\command");
-        let inbox_cmdline = format!("\"{exe_str}\" \"%1\"");
-        reg::add_default(&inbox_cmd, &inbox_cmdline)?;
+            // "Send to PasteCanvas Inbox" — all files
+            let inbox_key = format!(r"HKCR\*\shell\{MENU_INBOX}");
+            reg::add_default(&inbox_key, "Send to PasteCanvas Inbox")?;
+            let inbox_cmd = format!(r"HKCR\*\shell\{MENU_INBOX}\command");
+            let inbox_cmdline = format!("\"{exe_str}\" \"%1\"");
+            reg::add_default(&inbox_cmd, &inbox_cmdline)?;
 
-        // "Send to PasteCanvas last Board" — all files
-        let board_key = format!(r"HKCR\*\shell\{MENU_BOARD}");
-        reg::add_default(&board_key, "Send to PasteCanvas Board")?;
-        let board_cmd = format!(r"HKCR\*\shell\{MENU_BOARD}\command");
-        let board_cmdline = format!("\"{exe_str}\" --board \"%1\"");
-        reg::add_default(&board_cmd, &board_cmdline)?;
+            // "Send to PasteCanvas last Board" — all files
+            let board_key = format!(r"HKCR\*\shell\{MENU_BOARD}");
+            reg::add_default(&board_key, "Send to PasteCanvas Board")?;
+            let board_cmd = format!(r"HKCR\*\shell\{MENU_BOARD}\command");
+            let board_cmdline = format!("\"{exe_str}\" --board \"%1\"");
+            reg::add_default(&board_cmd, &board_cmdline)?;
 
-        // Directory (folder) entries — capture folder contents is out of scope for v1,
-        // but we register the Inbox entry on directories for future use.
-        let dir_key = format!(r"HKCR\Directory\shell\{MENU_INBOX}");
-        reg::add_default(&dir_key, "Send to PasteCanvas Inbox")?;
-        let dir_cmd = format!(r"HKCR\Directory\shell\{MENU_INBOX}\command");
-        reg::add_default(&dir_cmd, &inbox_cmdline)?;
-    }
+            // Directory (folder) entries — capture folder contents is out of scope for v1,
+            // but we register the Inbox entry on directories for future use.
+            let dir_key = format!(r"HKCR\Directory\shell\{MENU_INBOX}");
+            reg::add_default(&dir_key, "Send to PasteCanvas Inbox")?;
+            let dir_cmd = format!(r"HKCR\Directory\shell\{MENU_INBOX}\command");
+            reg::add_default(&dir_cmd, &inbox_cmdline)?;
 
-    #[cfg(not(target_os = "windows"))]
-    {
-        let _ = _state;
-        return Err("explorer integration is only supported on Windows".to_string());
-    }
+            tracing::info!(event = "explorer_integration_registered", exe = %exe_str);
+            Ok(())
+        }
 
-    tracing::info!(event = "explorer_integration_registered", exe = %exe_str);
-    Ok(())
+        #[cfg(not(target_os = "windows"))]
+        {
+            let _ = exe_str;
+            Err("explorer integration is only supported on Windows".to_string())
+        }
+    })
+    .await
+    .map_err(|e| format!("explorer registration task aborted: {e}"))?
 }
 
 /// Removes the Explorer context-menu entries.
 #[tauri::command]
 pub async fn unregister_explorer_integration() -> Result<(), String> {
-    #[cfg(target_os = "windows")]
-    {
-        use crate::platform::windows::reg;
-        let keys = [
-            format!(r"HKCR\*\shell\{MENU_INBOX}"),
-            format!(r"HKCR\*\shell\{MENU_BOARD}"),
-            format!(r"HKCR\Directory\shell\{MENU_INBOX}"),
-        ];
-        for key in keys {
-            reg::delete_key(&key)?;
+    tokio::task::spawn_blocking(|| -> Result<(), String> {
+        #[cfg(target_os = "windows")]
+        {
+            use crate::platform::windows::reg;
+            let keys = [
+                format!(r"HKCR\*\shell\{MENU_INBOX}"),
+                format!(r"HKCR\*\shell\{MENU_BOARD}"),
+                format!(r"HKCR\Directory\shell\{MENU_INBOX}"),
+            ];
+            for key in keys {
+                reg::delete_key(&key)?;
+            }
         }
-    }
-    tracing::info!(event = "explorer_integration_unregistered");
-    Ok(())
+        tracing::info!(event = "explorer_integration_unregistered");
+        Ok(())
+    })
+    .await
+    .map_err(|e| format!("explorer unregistration task aborted: {e}"))?
 }
 
 #[derive(Debug, Deserialize)]

@@ -34,6 +34,11 @@ const MIGRATIONS: &[MigrationFile] = &[
         name: "002_indexes",
         sql: include_str!("../../../migrations/002_indexes.sql"),
     },
+    MigrationFile {
+        version: 3,
+        name: "003_capture_dedup_indexes",
+        sql: include_str!("../../../migrations/003_capture_dedup_indexes.sql"),
+    },
 ];
 
 /// Runs all pending migrations in order.
@@ -165,11 +170,11 @@ mod tests {
     async fn migrations_apply_successfully() {
         let pool = create_test_pool().await.expect("create pool");
         let applied = run_migrations(&pool).await.expect("run migrations");
-        assert_eq!(applied, vec![1, 2]);
+        assert_eq!(applied, vec![1, 2, 3]);
 
         // Verify schema version
         let version = current_schema_version(&pool).await.expect("version");
-        assert_eq!(version, Some(2));
+        assert_eq!(version, Some(3));
     }
 
     #[tokio::test]
@@ -177,10 +182,26 @@ mod tests {
         let pool = create_test_pool().await.expect("create pool");
 
         let first = run_migrations(&pool).await.expect("first run");
-        assert_eq!(first, vec![1, 2]);
+        assert_eq!(first, vec![1, 2, 3]);
 
         let second = run_migrations(&pool).await.expect("second run");
         assert!(second.is_empty()); // Nothing new to apply
+    }
+
+    #[tokio::test]
+    async fn capture_dedup_indexes_exist_after_migration() {
+        let pool = create_test_pool().await.expect("create pool");
+        run_migrations(&pool).await.expect("migrations");
+
+        // assets.sha256 is covered by the UNIQUE constraint's implicit index;
+        // only the normalized_url lookup needs an explicit index.
+        let row: Option<(String,)> = sqlx::query_as(
+            "SELECT name FROM sqlite_master WHERE type='index' AND name='ix_items_normalized_url'",
+        )
+        .fetch_optional(&pool)
+        .await
+        .expect("query");
+        assert!(row.is_some(), "missing index ix_items_normalized_url");
     }
 
     #[tokio::test]

@@ -9,30 +9,8 @@
 //!   pastecanvas-explorer [--board] <file> [<file> ...]
 
 use pastecanvas_desktop_lib::application::explorer_service::ExplorerCaptureService;
+use pastecanvas_desktop_lib::bootstrap::external;
 use pastecanvas_desktop_lib::domain::value_objects::EntityId;
-use pastecanvas_desktop_lib::infrastructure::database::migrator;
-use pastecanvas_desktop_lib::infrastructure::database::pool::AppDatabase;
-use std::path::PathBuf;
-
-/// Tauri bundle identifier — must match tauri.conf.json so the bridge opens the same DB.
-const APP_IDENTIFIER: &str = "com.pastecanvas.desktop";
-const DB_FILENAME: &str = "pastecanvas.sqlite3";
-
-/// Resolves the app data directory (matches Tauri's app_data_dir layout).
-fn resolve_data_dir() -> Option<PathBuf> {
-    #[cfg(target_os = "windows")]
-    {
-        std::env::var("APPDATA")
-            .ok()
-            .map(|p| PathBuf::from(p).join(APP_IDENTIFIER))
-    }
-    #[cfg(not(target_os = "windows"))]
-    {
-        std::env::var("HOME")
-            .ok()
-            .map(|p| PathBuf::from(p).join(".local/share").join(APP_IDENTIFIER))
-    }
-}
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() {
@@ -47,31 +25,14 @@ async fn main() {
         std::process::exit(1);
     }
 
-    let data_dir = match resolve_data_dir() {
-        Some(d) => d,
-        None => {
-            eprintln!("cannot resolve app data dir");
-            std::process::exit(1);
-        }
-    };
-    if let Err(e) = std::fs::create_dir_all(&data_dir) {
-        eprintln!("create data dir: {e}");
-        std::process::exit(1);
-    }
-    let db_path = data_dir.join(DB_FILENAME);
-
-    // Open DB + run migrations
-    let db = match AppDatabase::open(&db_path).await {
-        Ok(db) => db,
+    // Open DB + run migrations (shared bootstrap with the NMH)
+    let (db, data_dir) = match external::open_migrated_db().await {
+        Ok(ok) => ok,
         Err(e) => {
-            eprintln!("open db: {e}");
+            eprintln!("{e}");
             std::process::exit(1);
         }
     };
-    if let Err(e) = migrator::run_migrations(db.pool()).await {
-        eprintln!("migrations: {e}");
-        std::process::exit(1);
-    }
 
     let svc = ExplorerCaptureService::new(db, EntityId::new(), data_dir.clone());
 

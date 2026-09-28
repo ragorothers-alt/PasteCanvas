@@ -1,6 +1,6 @@
 use crate::domain::entities::item::{CaptureMethod, InboxStatus, Item};
 use crate::domain::value_objects::{EntityId, ItemType, UnixMs};
-use crate::infrastructure::database::pool::AppDatabase;
+use crate::infrastructure::database::pool::{AppDatabase, CapturedAssetInsert};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 
@@ -214,15 +214,16 @@ impl CaptureService {
             return Err(CaptureError::EmptyClipboard);
         }
 
-        // Stage asset (content-addressed, atomic rename). Ensure store dirs
-        // exist (idempotent; matches the Explorer capture path).
+        // Stage asset (content-addressed, atomic rename) on the blocking
+        // pool — hashing/writing large PNGs must not stall the runtime.
         let asset_store =
             crate::infrastructure::asset_store::AssetStore::new(data_dir.to_path_buf());
         asset_store
             .initialize()
             .map_err(|e| CaptureError::Asset(e.to_string()))?;
         let staged = asset_store
-            .stage_bytes(&png_bytes, Some("clipboard_image.png"))
+            .stage_bytes_async(png_bytes, Some("clipboard_image.png".to_string()))
+            .await
             .map_err(|e| CaptureError::Asset(e.to_string()))?;
 
         let now = UnixMs::now();
@@ -237,27 +238,27 @@ impl CaptureService {
         let is_duplicate = duplicate_of.is_some();
 
         self.db
-            .insert_captured_asset_item(
-                item_id.as_str(),
-                "image",
-                "Clipboard Image",
-                capture_method.as_str(),
-                self.device_id.as_str(),
-                now.as_millis(),
-                &staged.sha256,
-                staged.media_kind.as_str(),
-                &staged.mime_type,
-                staged.byte_size as i64,
-                &staged.relative_path,
-                source_app.as_deref().unwrap_or(""),
-                "clipboard_image.png",
-            )
+            .insert_captured_asset_item(&CapturedAssetInsert {
+                item_id: item_id.as_str(),
+                item_type: "image",
+                title: "Clipboard Image",
+                capture_method: capture_method.as_str(),
+                device_id: self.device_id.as_str(),
+                now_ms: now.as_millis(),
+                sha256: &staged.sha256,
+                media_kind: staged.media_kind.as_str(),
+                mime_type: &staged.mime_type,
+                byte_size: staged.byte_size as i64,
+                relative_path: &staged.relative_path,
+                source_app: source_app.as_deref().unwrap_or(""),
+                filename: "clipboard_image.png",
+            })
             .await?;
 
         tracing::info!(
             event = "image_captured",
             item_id = %item_id,
-            byte_count = png_bytes.len(),
+            byte_count = staged.byte_size,
             is_duplicate = staged.is_duplicate,
         );
 
@@ -440,13 +441,19 @@ impl CaptureService {
             .file_name()
             .map(|f| f.to_string_lossy().to_string())
             .unwrap_or_else(|| "file".to_string());
-        let bytes = std::fs::read(file_path).map_err(|e| CaptureError::Asset(e.to_string()))?;
+        // Blocking file read + staging on the blocking pool (up to 50MB).
+        let path_owned = file_path.to_path_buf();
+        let bytes = tokio::task::spawn_blocking(move || std::fs::read(path_owned))
+            .await
+            .map_err(|e| CaptureError::Asset(e.to_string()))?
+            .map_err(|e| CaptureError::Asset(e.to_string()))?;
         let store = crate::infrastructure::asset_store::AssetStore::new(data_dir.to_path_buf());
         store
             .initialize()
             .map_err(|e| CaptureError::Asset(e.to_string()))?;
         let staged = store
-            .stage_bytes(&bytes, Some(&filename))
+            .stage_bytes_async(bytes, Some(filename.clone()))
+            .await
             .map_err(|e| CaptureError::Asset(e.to_string()))?;
 
         let now = UnixMs::now();
@@ -471,21 +478,21 @@ impl CaptureService {
             .map(EntityId::from_string);
 
         self.db
-            .insert_captured_asset_item(
-                item_id.as_str(),
+            .insert_captured_asset_item(&CapturedAssetInsert {
+                item_id: item_id.as_str(),
                 item_type,
                 title,
-                capture_method.as_str(),
-                self.device_id.as_str(),
-                now.as_millis(),
-                &staged.sha256,
-                staged.media_kind.as_str(),
-                &staged.mime_type,
-                staged.byte_size as i64,
-                &staged.relative_path,
-                source_app.as_deref().unwrap_or(""),
-                &filename,
-            )
+                capture_method: capture_method.as_str(),
+                device_id: self.device_id.as_str(),
+                now_ms: now.as_millis(),
+                sha256: &staged.sha256,
+                media_kind: staged.media_kind.as_str(),
+                mime_type: &staged.mime_type,
+                byte_size: staged.byte_size as i64,
+                relative_path: &staged.relative_path,
+                source_app: source_app.as_deref().unwrap_or(""),
+                filename: &filename,
+            })
             .await?;
 
         if let Some(ref sid) = session_id {

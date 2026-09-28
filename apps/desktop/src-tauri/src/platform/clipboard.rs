@@ -276,6 +276,15 @@ pub fn snapshot_clipboard(app: &tauri::AppHandle) -> ClipboardPayload {
     ClipboardPayload::Empty
 }
 
+/// Async variant for call sites running on the tokio runtime: clipboard read
+/// plus RGBA→PNG encoding is blocking work (Win32 FFI + CPU-heavy encode), so
+/// it runs on the blocking pool instead of stalling async tasks.
+pub async fn snapshot_clipboard_async(app: tauri::AppHandle) -> ClipboardPayload {
+    tokio::task::spawn_blocking(move || snapshot_clipboard(&app))
+        .await
+        .unwrap_or(ClipboardPayload::Empty)
+}
+
 #[cfg(target_os = "windows")]
 fn read_hdrop_files() -> Option<Vec<String>> {
     windows_clip::read_hdrop()
@@ -378,10 +387,9 @@ mod windows_clip {
             let bytes = read_cstr_bytes(ptr as *const u8);
             GlobalUnlock(handle);
             let _ = GMEM_FIXED_CHECK;
-            String::from_utf8(bytes).ok().or_else(|| {
-                // Some apps put UTF-16 in CF_HTML; try lossy latin1 fallback.
-                None
-            })
+            // CF_HTML is spec'd as UTF-8; non-UTF-8 payloads are dropped
+            // (no lossy fallback — a lossy decode would corrupt HTML offsets).
+            String::from_utf8(bytes).ok()
         }
     }
 

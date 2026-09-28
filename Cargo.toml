@@ -25,8 +25,7 @@ tauri-plugin-global-shortcut = "2"
 tauri-plugin-clipboard-manager = "2"
 
 # Async
-tokio = { version = "1", features = ["full"] }
-async-trait = "0.1"
+tokio = { version = "1", features = ["rt", "time", "macros"] }
 
 # Database
 sqlx = { version = "0.8", features = ["runtime-tokio", "sqlite"] }
@@ -37,7 +36,6 @@ serde_json = "1"
 
 # Error handling
 thiserror = "2"
-anyhow = "1"
 
 # UUID
 uuid = { version = "1", features = ["v7"] }
@@ -78,3 +76,11 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 # Internal crates
 pastecanvas-contracts = { path = "crates/pastecanvas-contracts" }
 pastecanvas-test-support = { path = "crates/pastecanvas-test-support" }
+
+# Shipped-desktop release profile: smaller, faster binaries.
+# thin LTO + single codegen unit improve optimization; symbols are stripped.
+# (panic stays unwind — Tauri/sqlx rely on catching panics at boundaries.)
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = "symbols"

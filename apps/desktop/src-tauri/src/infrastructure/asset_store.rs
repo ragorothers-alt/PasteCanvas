@@ -167,6 +167,22 @@ impl AssetStore {
         })
     }
 
+    /// Async entry point for capture pipelines: runs the heavy staging work
+    /// (SHA-256 over the payload, SVG sanitization, disk write + atomic
+    /// rename) on tokio's blocking pool so multi-megabyte captures never
+    /// stall the async runtime. Consumes the store (cheap PathBuf wrapper).
+    pub async fn stage_bytes_async(
+        self,
+        data: Vec<u8>,
+        original_filename: Option<String>,
+    ) -> Result<StagedAsset, AssetStoreError> {
+        tokio::task::spawn_blocking(move || self.stage_bytes(&data, original_filename.as_deref()))
+            .await
+            .map_err(|e| {
+                AssetStoreError::Io(std::io::Error::other(format!("staging task aborted: {e}")))
+            })?
+    }
+
     /// Returns the absolute path for a stored asset.
     pub fn resolve_path(&self, relative_path: &str) -> PathBuf {
         self.root.join(relative_path)

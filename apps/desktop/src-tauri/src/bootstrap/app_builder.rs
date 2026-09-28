@@ -52,19 +52,18 @@ pub fn build_and_run() {
                 tracing::error!(event = "pending_restore_failed", error = %e);
             }
 
-            // Open database and run migrations
-            let db = tauri::async_runtime::block_on(async {
+            // Open database, run migrations and persist the device id in one
+            // runtime entry (single block_on instead of several).
+            let (db, device_id) = tauri::async_runtime::block_on(async {
                 let db = AppDatabase::open(&db_path).await.expect("open database");
                 migrator::run_migrations(db.pool())
                     .await
                     .expect("run migrations");
-                db
-            });
-
-            let device_id = tauri::async_runtime::block_on(async {
-                db.load_or_create_current_device()
+                let device_id = db
+                    .load_or_create_current_device()
                     .await
-                    .expect("persist device id")
+                    .expect("persist device id");
+                (db, device_id)
             });
 
             // Manage shared state
@@ -80,26 +79,25 @@ pub fn build_and_run() {
             // Spawn background job runner
             job_runner::spawn_job_runner(db.clone(), app.handle().clone());
 
-            // Initialize default settings and exclusions
-            let settings_db = db.clone();
-            tauri::async_runtime::block_on(async {
-                let svc = crate::application::settings_service::SettingsService::new(settings_db);
-                if let Err(e) = svc.initialize_defaults().await {
-                    tracing::warn!(event = "settings_init_failed", error = %e);
-                }
-            });
-
             // Set up system tray
             tray::setup_tray(app.handle())?;
 
-            // WIN-005: register global hotkeys from stored bindings at startup
-            // (defaults were seeded by initialize_defaults above).
-            // FND-006: failures are collected and surfaced to the UI.
+            // Initialize default settings/exclusions, then register global
+            // hotkeys from the stored bindings (defaults were just seeded).
+            // Both share one runtime entry; failures are collected and
+            // surfaced to the UI (WIN-005 / FND-006).
             {
                 let handle = app.handle().clone();
+                let settings_db = db.clone();
                 let hotkey_db = db.clone();
                 let failures_state = &app.state::<AppState>().hotkey_failures;
                 tauri::async_runtime::block_on(async {
+                    let svc =
+                        crate::application::settings_service::SettingsService::new(settings_db);
+                    if let Err(e) = svc.initialize_defaults().await {
+                        tracing::warn!(event = "settings_init_failed", error = %e);
+                    }
+
                     let svc =
                         crate::application::settings_service::SettingsService::new(hotkey_db);
                     let mut failures: Vec<String> = Vec::new();
@@ -204,10 +202,6 @@ pub fn build_and_run() {
         .invoke_handler(tauri::generate_handler![
             commands::health::health_check,
             commands::capture::capture_text,
-            commands::capture::capture_clipboard,
-            commands::capture::capture_image,
-            commands::capture::capture_screenshot,
-            commands::capture::start_region_capture,
             commands::capture::get_region_capture_context,
             commands::capture::capture_region_screenshot,
             commands::capture::cancel_region_capture,
@@ -261,6 +255,8 @@ pub fn build_and_run() {
             commands::boards::create_edge,
             commands::boards::delete_edge,
             commands::boards::restore_board,
+            commands::boards::list_trashed_boards,
+            commands::boards::list_trashed_folders,
             commands::boards::toggle_board_favorite,
             commands::boards::reorder_boards,
             commands::boards::list_folders,
@@ -295,15 +291,9 @@ pub fn build_and_run() {
             commands::tags::add_tag_to_item,
             commands::tags::remove_tag_from_item,
             commands::tags::get_item_tags,
-            commands::window::toggle_always_on_top,
-            commands::window::get_always_on_top,
-            commands::window::show_main_window,
-            commands::window::hide_main_window,
-            commands::window::toggle_main_window,
             commands::window::set_autostart,
             commands::window::get_autostart,
             commands::window::show_quick_capture,
-            commands::window::hide_quick_capture,
             commands::window::close_quick_capture,
         ])
         .run(tauri::generate_context!())

@@ -265,4 +265,100 @@ mod tests {
             .expect("count");
         assert_eq!(leftover.0, 0);
     }
+
+    #[tokio::test]
+    async fn trashed_boards_are_listed_and_restorable() {
+        let (_, svc) = setup().await;
+        let board = svc
+            .create_board("Doomed Board", None)
+            .await
+            .expect("create");
+
+        // Nothing trashed yet.
+        let trashed = svc.list_trashed_boards().await.expect("list trashed");
+        assert!(trashed.is_empty());
+
+        svc.trash_board(&board.id).await.expect("trash");
+
+        // Hidden from the live list, visible in the trashed list.
+        assert!(svc.list_boards().await.expect("list").is_empty());
+        let trashed = svc.list_trashed_boards().await.expect("list trashed");
+        assert_eq!(trashed.len(), 1);
+        assert_eq!(trashed[0].name, "Doomed Board");
+
+        // Restore puts it back.
+        svc.restore_board(&board.id).await.expect("restore");
+        assert!(
+            svc.list_trashed_boards()
+                .await
+                .expect("list trashed")
+                .is_empty()
+        );
+        let boards = svc.list_boards().await.expect("list");
+        assert_eq!(boards.len(), 1);
+        assert_eq!(boards[0].name, "Doomed Board");
+    }
+
+    #[tokio::test]
+    async fn list_boards_reports_node_count_from_aggregate() {
+        let (db, svc) = setup().await;
+        let board = svc.create_board("Counted", None).await.expect("create");
+
+        // Two live nodes on the board, one soft-deleted (must not count).
+        let now = chrono::Utc::now().timestamp_millis();
+        for (node_id, deleted) in [("n1", false), ("n2", false), ("n3", true)] {
+            let del_sql = if deleted { "?" } else { "NULL" };
+            let sql = format!(
+                "INSERT INTO board_nodes (id, board_id, node_kind, x, y, width, height, z_index,
+                  created_at, updated_at, revision, origin_device_id, last_modified_device_id, sync_state, deleted_at)
+                 VALUES (?, ?, 'group', 0, 0, 100, 100, 0, ?, ?, 1, 'dev', 'dev', 'local_only', {del_sql})"
+            );
+            let mut q = sqlx::query(&sql)
+                .bind(node_id)
+                .bind(&board.id)
+                .bind(now)
+                .bind(now);
+            if deleted {
+                q = q.bind(now);
+            }
+            q.execute(db.pool()).await.expect("insert node");
+        }
+
+        let boards = svc.list_boards().await.expect("list");
+        assert_eq!(boards[0].node_count, 2);
+    }
+
+    #[tokio::test]
+    async fn trashed_folders_are_listed_and_restorable() {
+        let (_, svc) = setup().await;
+        let folder = svc
+            .create_folder("Doomed Folder", None)
+            .await
+            .expect("create");
+
+        assert!(
+            svc.list_trashed_folders()
+                .await
+                .expect("list trashed")
+                .is_empty()
+        );
+
+        svc.trash_folder(&folder.id).await.expect("trash");
+
+        assert!(svc.list_folders().await.expect("list").is_empty());
+        let trashed = svc.list_trashed_folders().await.expect("list trashed");
+        assert_eq!(trashed.len(), 1);
+        assert_eq!(trashed[0].name, "Doomed Folder");
+
+        svc.restore_folder(&folder.id).await.expect("restore");
+        assert!(
+            svc.list_trashed_folders()
+                .await
+                .expect("list trashed")
+                .is_empty()
+        );
+        let folders = svc.list_folders().await.expect("list");
+        assert_eq!(folders.len(), 1);
+        assert_eq!(folders[0].name, "Doomed Folder");
+    }
 }

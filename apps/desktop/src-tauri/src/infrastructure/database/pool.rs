@@ -16,6 +16,24 @@ pub struct AppDatabase {
     pool: Arc<SqlitePool>,
 }
 
+/// Parameters for `insert_captured_asset_item` — one named struct instead of
+/// 13 positional arguments shared by the image/screenshot/explorer paths.
+pub struct CapturedAssetInsert<'a> {
+    pub item_id: &'a str,
+    pub item_type: &'a str,
+    pub title: &'a str,
+    pub capture_method: &'a str,
+    pub device_id: &'a str,
+    pub now_ms: i64,
+    pub sha256: &'a str,
+    pub media_kind: &'a str,
+    pub mime_type: &'a str,
+    pub byte_size: i64,
+    pub relative_path: &'a str,
+    pub source_app: &'a str,
+    pub filename: &'a str,
+}
+
 impl AppDatabase {
     /// Creates a SQLite connection pool with production-safe settings.
     pub async fn open(db_path: &Path) -> Result<Self, sqlx::Error> {
@@ -169,19 +187,7 @@ impl AppDatabase {
     /// transaction. Shared by image / screenshot / explorer capture paths.
     pub async fn insert_captured_asset_item(
         &self,
-        item_id: &str,
-        item_type: &str,
-        title: &str,
-        capture_method: &str,
-        device_id: &str,
-        now_ms: i64,
-        sha256: &str,
-        media_kind: &str,
-        mime_type: &str,
-        byte_size: i64,
-        relative_path: &str,
-        source_app: &str,
-        filename: &str,
+        p: &CapturedAssetInsert<'_>,
     ) -> Result<(), sqlx::Error> {
         let mut tx = self.pool.begin().await?;
 
@@ -190,15 +196,15 @@ impl AppDatabase {
               capture_method, created_at, updated_at, revision, origin_device_id, last_modified_device_id, sync_state)
              VALUES (?, ?, ?, ?, 'new', 0, 0, ?, ?, ?, 1, ?, ?, 'local_only')",
         )
-        .bind(item_id)
-        .bind(item_type)
-        .bind(title)
-        .bind(sha256)
-        .bind(capture_method)
-        .bind(now_ms)
-        .bind(now_ms)
-        .bind(device_id)
-        .bind(device_id)
+        .bind(p.item_id)
+        .bind(p.item_type)
+        .bind(p.title)
+        .bind(p.sha256)
+        .bind(p.capture_method)
+        .bind(p.now_ms)
+        .bind(p.now_ms)
+        .bind(p.device_id)
+        .bind(p.device_id)
         .execute(&mut *tx)
         .await?;
 
@@ -208,24 +214,24 @@ impl AppDatabase {
              VALUES (?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(asset_id.as_str())
-        .bind(sha256)
-        .bind(media_kind)
-        .bind(mime_type)
-        .bind(byte_size)
-        .bind(relative_path)
-        .bind(now_ms)
+        .bind(p.sha256)
+        .bind(p.media_kind)
+        .bind(p.mime_type)
+        .bind(p.byte_size)
+        .bind(p.relative_path)
+        .bind(p.now_ms)
         .execute(&mut *tx)
         .await?;
 
         let actual_asset: (String,) = sqlx::query_as("SELECT id FROM assets WHERE sha256 = ?")
-            .bind(sha256)
+            .bind(p.sha256)
             .fetch_one(&mut *tx)
             .await?;
 
         sqlx::query(
             "INSERT OR IGNORE INTO item_assets (item_id, asset_id, role, sort_order) VALUES (?, ?, 'primary', 0)",
         )
-        .bind(item_id)
+        .bind(p.item_id)
         .bind(&actual_asset.0)
         .execute(&mut *tx)
         .await?;
@@ -234,11 +240,11 @@ impl AppDatabase {
             "INSERT INTO search_documents (item_id, title, body, url, domain, source_app, tags_text, filename, updated_at)
              VALUES (?, ?, '', '', '', ?, '', ?, ?)",
         )
-        .bind(item_id)
-        .bind(title)
-        .bind(source_app)
-        .bind(filename)
-        .bind(now_ms)
+        .bind(p.item_id)
+        .bind(p.title)
+        .bind(p.source_app)
+        .bind(p.filename)
+        .bind(p.now_ms)
         .execute(&mut *tx)
         .await?;
 
@@ -382,7 +388,7 @@ impl AppDatabase {
              LEFT JOIN search_documents sd ON sd.item_id = i.id
              LEFT JOIN item_assets ia ON ia.item_id = i.id AND ia.role = 'primary'
              LEFT JOIN assets a ON a.id = ia.asset_id
-             WHERE i.deleted_at IS NULL AND i.inbox_status != 'archived'
+             WHERE i.deleted_at IS NULL AND i.inbox_status IN ('new','triaged')
              ORDER BY i.is_pinned DESC, i.created_at DESC
              LIMIT ? OFFSET ?"
         };
@@ -595,27 +601,31 @@ impl AppDatabase {
             .await?;
         let deleted_items = result.rows_affected() as i64;
 
-        // Find orphaned assets (no remaining item_assets references)
+        // Find orphaned assets (no remaining item_assets references) — one
+        // set-based scan of the candidate list instead of per-asset queries.
         let mut orphan_paths = Vec::new();
-        for (asset_id,) in asset_ids {
-            let refs: (i64,) =
-                sqlx::query_as("SELECT COUNT(*) FROM item_assets WHERE asset_id = ?")
-                    .bind(&asset_id)
-                    .fetch_one(&mut *tx)
-                    .await?;
-            if refs.0 == 0 {
-                let path: Option<(String,)> =
-                    sqlx::query_as("SELECT relative_path FROM assets WHERE id = ?")
-                        .bind(&asset_id)
-                        .fetch_optional(&mut *tx)
-                        .await?;
-                if let Some((p,)) = path {
-                    orphan_paths.push(p);
+        if !asset_ids.is_empty() {
+            let placeholders = vec!["?"; asset_ids.len()].join(", ");
+            let orphan_sql = format!(
+                "SELECT a.id, a.relative_path FROM assets a
+                 WHERE a.id IN ({placeholders})
+                   AND NOT EXISTS (SELECT 1 FROM item_assets ia WHERE ia.asset_id = a.id)"
+            );
+            let mut orphan_query = sqlx::query_as::<_, (String, String)>(&orphan_sql);
+            for (asset_id,) in &asset_ids {
+                orphan_query = orphan_query.bind(asset_id);
+            }
+            let orphans: Vec<(String, String)> = orphan_query.fetch_all(&mut *tx).await?;
+
+            if !orphans.is_empty() {
+                orphan_paths = orphans.iter().map(|(_, p)| p.clone()).collect();
+                let orphan_placeholders = vec!["?"; orphans.len()].join(", ");
+                let delete_sql = format!("DELETE FROM assets WHERE id IN ({orphan_placeholders})");
+                let mut delete_query = sqlx::query(&delete_sql);
+                for (orphan_id, _) in &orphans {
+                    delete_query = delete_query.bind(orphan_id);
                 }
-                sqlx::query("DELETE FROM assets WHERE id = ?")
-                    .bind(&asset_id)
-                    .execute(&mut *tx)
-                    .await?;
+                delete_query.execute(&mut *tx).await?;
             }
         }
 
@@ -751,5 +761,54 @@ mod tests {
             .await
             .expect("count");
         assert_eq!(count.0, 1);
+    }
+
+    /// Regression guard: the capture/inbox hot paths must stay index-driven.
+    /// An index that exists but is never chosen is the same as no index.
+    #[tokio::test]
+    async fn hot_path_queries_use_their_indexes() {
+        let db = AppDatabase::open_in_memory().await.expect("open db");
+        crate::infrastructure::database::migrator::run_migrations(db.pool())
+            .await
+            .expect("migrations");
+
+        async fn explain(pool: &sqlx::SqlitePool, sql: &str) -> String {
+            let rows: Vec<(i64, i64, i64, String)> =
+                sqlx::query_as(&format!("EXPLAIN QUERY PLAN {sql}"))
+                    .fetch_all(pool)
+                    .await
+                    .expect("explain");
+            rows.into_iter()
+                .map(|(_, _, _, detail)| detail)
+                .collect::<Vec<_>>()
+                .join("\n")
+        }
+
+        let cases = [
+            (
+                "SELECT id FROM items WHERE normalized_url = 'x' AND deleted_at IS NULL ORDER BY created_at ASC LIMIT 1",
+                "ix_items_normalized_url",
+            ),
+            (
+                "SELECT id FROM items WHERE content_hash = 'x' AND deleted_at IS NULL ORDER BY created_at ASC LIMIT 1",
+                "ix_items_content_hash",
+            ),
+            (
+                // UNIQUE(sha256) in 001 provides the implicit unique index.
+                "SELECT id FROM assets WHERE sha256 = 'x'",
+                "sqlite_autoindex_assets",
+            ),
+            (
+                "SELECT id FROM items WHERE deleted_at IS NULL AND inbox_status IN ('new','triaged') ORDER BY is_pinned DESC, created_at DESC LIMIT 200",
+                "ix_items_inbox",
+            ),
+        ];
+        for (sql, expected_index) in cases {
+            let plan = explain(db.pool(), sql).await;
+            assert!(
+                plan.contains(expected_index),
+                "expected {expected_index} to be used; plan was:\n{plan}"
+            );
+        }
     }
 }

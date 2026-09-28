@@ -52,6 +52,25 @@ const MAX_RESPONSE_SIZE: u64 = 1_000_000; // 1MB
 const MAX_REDIRECTS: usize = 3;
 const TIMEOUT_SECS: u64 = 10;
 
+/// One shared HTTP client for all metadata jobs — reqwest clients own the
+/// connection pool and TLS sessions, so rebuilding one per job wastes both.
+fn shared_client() -> Result<&'static reqwest::Client, MetadataError> {
+    static CLIENT: std::sync::OnceLock<reqwest::Client> = std::sync::OnceLock::new();
+    if let Some(client) = CLIENT.get() {
+        return Ok(client);
+    }
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(TIMEOUT_SECS))
+        .redirect(reqwest::redirect::Policy::none())
+        .user_agent("PasteCanvas/0.1 (metadata bot)")
+        .build()
+        .map_err(MetadataError::Http)?;
+    // A racing thread may win the slot with its own client — either way we
+    // return a valid shared instance.
+    let _ = CLIENT.set(client);
+    Ok(CLIENT.get().expect("client slot initialized"))
+}
+
 /// Fetches metadata (title, favicon) from a URL with SSRF protections.
 pub async fn fetch_link_metadata(target_url: &str) -> Result<LinkMetadata, MetadataError> {
     // Validate scheme
@@ -75,11 +94,7 @@ pub async fn fetch_link_metadata(target_url: &str) -> Result<LinkMetadata, Metad
 
     // Build client WITHOUT auto-follow redirects: each hop is validated
     // individually below (SEC-001).
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(TIMEOUT_SECS))
-        .redirect(reqwest::redirect::Policy::none())
-        .user_agent("PasteCanvas/0.1 (metadata bot)")
-        .build()?;
+    let client = shared_client()?;
 
     // Follow redirects manually, validating every destination.
     let mut current_url = parsed.clone();

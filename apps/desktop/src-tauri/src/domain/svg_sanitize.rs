@@ -47,18 +47,19 @@ fn has_event_handler(lower: &str) -> bool {
     let bytes = lower.as_bytes();
     let mut i = 0;
     while i + 3 < bytes.len() {
-        if bytes[i] == b' ' || bytes[i] == b'\t' || bytes[i] == b'\n' || bytes[i] == b'\r' {
-            if bytes[i + 1] == b'o' && bytes[i + 2] == b'n' {
-                let mut j = i + 3;
-                while j < bytes.len() && bytes[j].is_ascii_alphabetic() {
-                    j += 1;
-                }
-                while j < bytes.len() && bytes[j].is_ascii_whitespace() {
-                    j += 1;
-                }
-                if j < bytes.len() && bytes[j] == b'=' && j > i + 3 {
-                    return true;
-                }
+        if (bytes[i] == b' ' || bytes[i] == b'\t' || bytes[i] == b'\n' || bytes[i] == b'\r')
+            && bytes[i + 1] == b'o'
+            && bytes[i + 2] == b'n'
+        {
+            let mut j = i + 3;
+            while j < bytes.len() && bytes[j].is_ascii_alphabetic() {
+                j += 1;
+            }
+            while j < bytes.len() && bytes[j].is_ascii_whitespace() {
+                j += 1;
+            }
+            if j < bytes.len() && bytes[j] == b'=' && j > i + 3 {
+                return true;
             }
         }
         i += 1;

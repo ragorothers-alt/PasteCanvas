@@ -4,9 +4,8 @@
 //! "Send to PasteCanvas" entries appear in Explorer. Registration is written under
 //! HKCU\Software\Classes (per-user, no admin required — local-first friendly).
 //!
-//! For the Windows 11 *modern* context menu, an MSIX sparse package is additionally
-//! required; `register_modern_explorer_menu` also emits the sparse-package manifest
-//! + registration script under the app data dir so it can be applied with one command.
+//! For the Windows 11 *modern* context menu, a sparse package must actually be
+//! registered with Add-AppxPackage. Writing a script alone is not success.
 
 use serde::Serialize;
 use tauri::State;
@@ -32,7 +31,11 @@ fn explorer_command_verbs() -> [(&'static str, &'static str, &'static str); 2] {
 pub struct ExplorerMenuRegistrationDto {
     pub dll_path: String,
     pub sparse_manifest_path: Option<String>,
+    /// Classic / "Show more options" IExplorerCommand verbs were written.
     pub registered: bool,
+    /// Win11 compact menu sparse package was actually registered with the OS.
+    pub modern_registered: bool,
+    pub modern_error: Option<String>,
 }
 
 fn dll_path() -> Result<std::path::PathBuf, String> {
@@ -53,78 +56,219 @@ fn reg_add(key: &str, value_name: Option<&str>, data: &str) -> Result<(), String
 }
 
 /// Registers the IExplorerCommand COM server + shell entries for files & folders.
+/// All OS work (reg.exe spawns, file copies, PowerShell) runs on the blocking
+/// pool — a dozen subprocess launches must not stall the async runtime.
 #[tauri::command]
 pub async fn register_modern_explorer_menu(
     state: State<'_, AppState>,
 ) -> Result<ExplorerMenuRegistrationDto, String> {
-    let dll = dll_path()?;
-    if !dll.exists() {
-        return Err(format!("COM DLL not found at {}", dll.display()));
-    }
-    let dll_str = dll.display().to_string();
-
-    #[cfg(target_os = "windows")]
-    {
-        for clsid in [CLSID_INBOX, CLSID_BOARD] {
-            let clsid_key = format!(r"HKCU\Software\Classes\CLSID\{clsid}");
-            let inproc = format!(r"{clsid_key}\InprocServer32");
-            reg_add(&clsid_key, None, "PasteCanvas Explorer Command")?;
-            reg_add(&inproc, None, &dll_str)?;
-            reg_add(&inproc, Some("ThreadingModel"), "Apartment")?;
+    let data_dir = state.data_dir.clone();
+    tokio::task::spawn_blocking(move || -> Result<ExplorerMenuRegistrationDto, String> {
+        let dll = dll_path()?;
+        if !dll.exists() {
+            return Err(format!("COM DLL not found at {}", dll.display()));
         }
-        // IExplorerCommand is invoked only when ExplorerCommandHandler is set.
-        // A bare shell key with just a display name is a dead menu item.
-        for root in [
-            r"HKCU\Software\Classes\*",
-            r"HKCU\Software\Classes\Directory",
-        ] {
-            for (clsid, verb, title) in explorer_command_verbs() {
-                let shell_key = format!(r"{root}\shell\{verb}");
-                reg_add(&shell_key, None, title)?;
-                reg_add(&shell_key, Some("ExplorerCommandHandler"), clsid)?;
+        let dll_str = dll.display().to_string();
+
+        #[cfg(target_os = "windows")]
+        {
+            for clsid in [CLSID_INBOX, CLSID_BOARD] {
+                let clsid_key = format!(r"HKCU\Software\Classes\CLSID\{clsid}");
+                let inproc = format!(r"{clsid_key}\InprocServer32");
+                reg_add(&clsid_key, None, "PasteCanvas Explorer Command")?;
+                reg_add(&inproc, None, &dll_str)?;
+                reg_add(&inproc, Some("ThreadingModel"), "Apartment")?;
+            }
+            // IExplorerCommand is invoked only when ExplorerCommandHandler is set.
+            // A bare shell key with just a display name is a dead menu item.
+            for root in [
+                r"HKCU\Software\Classes\*",
+                r"HKCU\Software\Classes\Directory",
+            ] {
+                for (clsid, verb, title) in explorer_command_verbs() {
+                    let shell_key = format!(r"{root}\shell\{verb}");
+                    reg_add(&shell_key, None, title)?;
+                    reg_add(&shell_key, Some("ExplorerCommandHandler"), clsid)?;
+                }
             }
         }
-    }
 
-    #[cfg(not(target_os = "windows"))]
-    {
-        return Err("modern explorer menu is only supported on Windows".to_string());
-    }
+        #[cfg(not(target_os = "windows"))]
+        {
+            return Err("modern explorer menu is only supported on Windows".to_string());
+        }
 
-    // Emit a sparse-package manifest + registration script for the Win11 modern menu
-    let sparse_manifest = write_sparse_package_assets(&state.data_dir, &dll_str)?;
+        // Stage + try to register the Win11 sparse package. Failure must not look
+        // like success: classic verbs still work under "Show more options".
+        let (sparse_manifest, modern_registered, modern_error) =
+            apply_sparse_package(&data_dir, &dll)?;
 
-    tracing::info!(event = "explorer_menu_registered", dll = %dll_str);
-    Ok(ExplorerMenuRegistrationDto {
-        dll_path: dll_str,
-        sparse_manifest_path: sparse_manifest,
-        registered: true,
+        tracing::info!(
+            event = "explorer_menu_registered",
+            dll = %dll_str,
+            modern = modern_registered
+        );
+        Ok(ExplorerMenuRegistrationDto {
+            dll_path: dll_str,
+            sparse_manifest_path: sparse_manifest,
+            registered: true,
+            modern_registered,
+            modern_error,
+        })
     })
+    .await
+    .map_err(|e| format!("explorer menu registration task aborted: {e}"))?
 }
 
 /// Removes the COM server + shell entries.
 #[tauri::command]
 pub async fn unregister_modern_explorer_menu() -> Result<(), String> {
-    #[cfg(target_os = "windows")]
-    {
-        use crate::platform::windows::reg;
-        let mut keys = Vec::new();
-        for clsid in [CLSID_INBOX, CLSID_BOARD] {
-            keys.push(format!(r"HKCU\Software\Classes\CLSID\{clsid}"));
-        }
-        for root in [
-            r"HKCU\Software\Classes\*",
-            r"HKCU\Software\Classes\Directory",
-        ] {
-            for (_, verb, _) in explorer_command_verbs() {
-                keys.push(format!(r"{root}\shell\{verb}"));
+    tokio::task::spawn_blocking(|| -> Result<(), String> {
+        #[cfg(target_os = "windows")]
+        {
+            use crate::platform::windows::reg;
+            let mut keys = Vec::new();
+            for clsid in [CLSID_INBOX, CLSID_BOARD] {
+                keys.push(format!(r"HKCU\Software\Classes\CLSID\{clsid}"));
             }
+            for root in [
+                r"HKCU\Software\Classes\*",
+                r"HKCU\Software\Classes\Directory",
+            ] {
+                for (_, verb, _) in explorer_command_verbs() {
+                    keys.push(format!(r"{root}\shell\{verb}"));
+                }
+            }
+            for key in keys {
+                reg::delete_key(&key)?;
+            }
+            let _ = remove_sparse_package();
         }
-        for key in keys {
-            reg::delete_key(&key)?;
-        }
+        tracing::info!(event = "explorer_menu_unregistered");
+        Ok(())
+    })
+    .await
+    .map_err(|e| format!("explorer menu unregistration task aborted: {e}"))?
+}
+
+const BRIDGE_EXE: &str = "pastecanvas-explorer.exe";
+const PACKAGE_FAMILY: &str = "PasteCanvas.ExplorerMenu";
+
+fn explorer_bridge_path() -> Result<std::path::PathBuf, String> {
+    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+    let dir = exe
+        .parent()
+        .ok_or_else(|| "no exe parent dir".to_string())?;
+    Ok(dir.join(BRIDGE_EXE))
+}
+
+/// Stages the sparse package and tries to register it with the OS.
+/// Never reports modern success unless `Add-AppxPackage` actually succeeded.
+fn apply_sparse_package(
+    data_dir: &std::path::Path,
+    dll: &std::path::Path,
+) -> Result<(Option<String>, bool, Option<String>), String> {
+    let script = write_sparse_package_assets(data_dir, &dll.display().to_string())?;
+    let package_dir = data_dir.join("explorer-sparse");
+    if let Err(e) = stage_sparse_package_binaries(&package_dir, dll) {
+        return Ok((script, false, Some(e)));
     }
-    tracing::info!(event = "explorer_menu_unregistered");
+    let manifest = package_dir.join("AppxManifest.xml");
+    match register_sparse_package(&manifest) {
+        Ok(()) => Ok((script, true, None)),
+        Err(e) => Ok((script, false, Some(e))),
+    }
+}
+
+fn stage_sparse_package_binaries(
+    package_dir: &std::path::Path,
+    dll: &std::path::Path,
+) -> Result<(), String> {
+    std::fs::create_dir_all(package_dir.join("Assets"))
+        .map_err(|e| format!("create sparse package dir: {e}"))?;
+    let staged_manifest = package_dir.join("AppxManifest.xml");
+    let source_manifest = package_dir
+        .parent()
+        .unwrap_or(package_dir)
+        .join("explorer-menu-appxmanifest.xml");
+    if source_manifest.exists() {
+        std::fs::copy(&source_manifest, &staged_manifest)
+            .map_err(|e| format!("copy manifest: {e}"))?;
+    }
+    let logo_src = package_dir
+        .parent()
+        .unwrap_or(package_dir)
+        .join("Assets")
+        .join("logo.png");
+    if logo_src.exists() {
+        std::fs::copy(&logo_src, package_dir.join("Assets").join("logo.png"))
+            .map_err(|e| format!("copy logo: {e}"))?;
+    }
+    std::fs::copy(dll, package_dir.join(DLL_NAME)).map_err(|e| format!("copy COM DLL: {e}"))?;
+    let bridge = explorer_bridge_path()?;
+    if !bridge.exists() {
+        return Err(format!("explorer bridge not found at {}", bridge.display()));
+    }
+    std::fs::copy(&bridge, package_dir.join(BRIDGE_EXE))
+        .map_err(|e| format!("copy explorer bridge: {e}"))?;
+    Ok(())
+}
+
+#[cfg(target_os = "windows")]
+fn register_sparse_package(manifest: &std::path::Path) -> Result<(), String> {
+    let output = std::process::Command::new("powershell")
+        .args([
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-Command",
+            &format!(
+                "Add-AppxPackage -Register -Path '{}' -ErrorAction Stop",
+                manifest.display()
+            ),
+        ])
+        .output()
+        .map_err(|e| format!("failed to start PowerShell: {e}"))?;
+    if output.status.success() {
+        return Ok(());
+    }
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let detail = [stderr.trim(), stdout.trim()]
+        .into_iter()
+        .find(|s| !s.is_empty())
+        .unwrap_or("Add-AppxPackage failed");
+    Err(detail.to_string())
+}
+
+#[cfg(not(target_os = "windows"))]
+fn register_sparse_package(_manifest: &std::path::Path) -> Result<(), String> {
+    Err("sparse package registration is only supported on Windows".to_string())
+}
+
+#[cfg(target_os = "windows")]
+fn remove_sparse_package() -> Result<(), String> {
+    let output = std::process::Command::new("powershell")
+        .args([
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-Command",
+            &format!(
+                "Get-AppxPackage -Name '{PACKAGE_FAMILY}' | Remove-AppxPackage -ErrorAction SilentlyContinue"
+            ),
+        ])
+        .output()
+        .map_err(|e| format!("failed to start PowerShell: {e}"))?;
+    if output.status.success() {
+        Ok(())
+    } else {
+        Err(String::from_utf8_lossy(&output.stderr).trim().to_string())
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn remove_sparse_package() -> Result<(), String> {
     Ok(())
 }
 
@@ -132,7 +276,7 @@ pub async fn unregister_modern_explorer_menu() -> Result<(), String> {
 /// entries can surface in the Windows 11 modern context menu. Returns the script path.
 fn write_sparse_package_assets(
     data_dir: &std::path::Path,
-    dll_path: &str,
+    _dll_path: &str,
 ) -> Result<Option<String>, String> {
     let manifest = format!(
         r#"<?xml version="1.0" encoding="utf-8"?>
@@ -190,7 +334,7 @@ fn write_sparse_package_assets(
 "#,
         inbox = CLSID_INBOX,
         board = CLSID_BOARD,
-        dll = dll_path,
+        dll = DLL_NAME,
     );
 
     let manifest_path = data_dir.join("explorer-menu-appxmanifest.xml");
@@ -255,6 +399,18 @@ mod tests {
 
         let logo = dir.path().join("Assets").join("logo.png");
         assert!(logo.exists(), "sparse package logo must exist");
+    }
+
+    #[test]
+    fn apply_sparse_package_does_not_claim_modern_success_without_bridge() {
+        let dir = tempfile::TempDir::new().expect("temp dir");
+        let dll = dir.path().join(DLL_NAME);
+        std::fs::write(&dll, b"dll").expect("fake dll");
+        let (script, modern, err) =
+            apply_sparse_package(dir.path(), &dll).expect("apply should not hard-fail");
+        assert!(script.is_some());
+        assert!(!modern, "missing bridge must not report modern success");
+        assert!(err.is_some());
     }
 
     #[test]

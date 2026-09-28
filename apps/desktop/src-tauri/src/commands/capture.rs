@@ -4,6 +4,7 @@ use tauri::State;
 use crate::application::capture_service::{CaptureService, CaptureTextRequest};
 use crate::bootstrap::app_state::AppState;
 use crate::domain::entities::item::CaptureMethod;
+use crate::infrastructure::database::pool::CapturedAssetInsert;
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -68,177 +69,6 @@ pub async fn capture_text(
         is_duplicate: result.is_duplicate,
         duplicate_of: result.duplicate_of.map(|id| id.to_string()),
     })
-}
-
-/// Captures the current clipboard text content — triggered by global hotkey.
-#[tauri::command]
-pub async fn capture_clipboard(
-    app: tauri::AppHandle,
-    state: State<'_, AppState>,
-    clipboard_text: String,
-) -> Result<CaptureTextCommandResponse, String> {
-    if clipboard_text.trim().is_empty() {
-        return Err("Clipboard is empty".to_string());
-    }
-
-    let svc = CaptureService::new(state.db.clone(), state.device_id.clone());
-
-    let result = svc
-        .capture_text(CaptureTextRequest {
-            text: clipboard_text,
-            capture_method: CaptureMethod::ManualHotkey,
-            source_app: None,
-            window_title: None,
-        })
-        .await
-        .map_err(|e| e.to_string())?;
-
-    crate::events::emit_item_captured(&app, result.item_id.as_str());
-
-    Ok(CaptureTextCommandResponse {
-        item_id: result.item_id.to_string(),
-        committed_at: result.committed_at.as_millis(),
-        is_duplicate: result.is_duplicate,
-        duplicate_of: result.duplicate_of.map(|id| id.to_string()),
-    })
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct CaptureImageRequest {
-    /// Base64-encoded image bytes (PNG)
-    pub data_base64: String,
-    #[serde(default)]
-    pub source_app: Option<String>,
-}
-
-/// Captures an image from base64 data (clipboard image or drag/drop).
-#[tauri::command]
-pub async fn capture_image(
-    app: tauri::AppHandle,
-    state: State<'_, AppState>,
-    request: CaptureImageRequest,
-) -> Result<CaptureTextCommandResponse, String> {
-    use crate::domain::value_objects::{EntityId, UnixMs};
-    use base64::Engine;
-
-    // Decode base64
-    let bytes = base64::engine::general_purpose::STANDARD
-        .decode(&request.data_base64)
-        .map_err(|e| format!("invalid base64: {e}"))?;
-
-    if bytes.is_empty() {
-        return Err("empty image data".to_string());
-    }
-
-    // Stage asset
-    let asset_store = crate::infrastructure::asset_store::AssetStore::new(state.data_dir.clone());
-    let staged = asset_store
-        .stage_bytes(&bytes, Some("clipboard_image.png"))
-        .map_err(|e| e.to_string())?;
-
-    let now = UnixMs::now();
-    let item_id = EntityId::new();
-
-    state
-        .db
-        .insert_captured_asset_item(
-            item_id.as_str(),
-            "image",
-            "Clipboard Image",
-            "manual_hotkey",
-            state.device_id.as_str(),
-            now.as_millis(),
-            &staged.sha256,
-            staged.media_kind.as_str(),
-            &staged.mime_type,
-            staged.byte_size as i64,
-            &staged.relative_path,
-            request.source_app.as_deref().unwrap_or(""),
-            "clipboard_image.png",
-        )
-        .await
-        .map_err(|e| e.to_string())?;
-
-    crate::events::emit_item_captured(&app, item_id.as_str());
-
-    tracing::info!(
-        event = "image_captured",
-        item_id = %item_id,
-        byte_count = bytes.len(),
-        is_duplicate = staged.is_duplicate,
-    );
-
-    Ok(CaptureTextCommandResponse {
-        item_id: item_id.to_string(),
-        committed_at: now.as_millis(),
-        is_duplicate: staged.is_duplicate,
-        duplicate_of: None,
-    })
-}
-
-/// Captures a screenshot of the entire virtual screen.
-#[tauri::command]
-pub async fn capture_screenshot(
-    app: tauri::AppHandle,
-    state: State<'_, AppState>,
-) -> Result<CaptureTextCommandResponse, String> {
-    use crate::domain::value_objects::{EntityId, UnixMs};
-
-    // Capture screen (platform-specific)
-    let raw_data = crate::platform::windows::screenshot::capture_screen()?;
-
-    // Stage as asset
-    let asset_store = crate::infrastructure::asset_store::AssetStore::new(state.data_dir.clone());
-    let staged = asset_store
-        .stage_bytes(&raw_data, Some("screenshot.png"))
-        .map_err(|e| e.to_string())?;
-
-    let now = UnixMs::now();
-    let item_id = EntityId::new();
-
-    state
-        .db
-        .insert_captured_asset_item(
-            item_id.as_str(),
-            "screenshot",
-            "Screenshot",
-            "screenshot",
-            state.device_id.as_str(),
-            now.as_millis(),
-            &staged.sha256,
-            "image",
-            "image/png",
-            staged.byte_size as i64,
-            &staged.relative_path,
-            "",
-            "screenshot.png",
-        )
-        .await
-        .map_err(|e| e.to_string())?;
-
-    crate::events::emit_item_captured(&app, item_id.as_str());
-
-    tracing::info!(
-        event = "screenshot_captured",
-        item_id = %item_id,
-        byte_count = raw_data.len(),
-    );
-
-    Ok(CaptureTextCommandResponse {
-        item_id: item_id.to_string(),
-        committed_at: now.as_millis(),
-        is_duplicate: staged.is_duplicate,
-        duplicate_of: None,
-    })
-}
-
-/// Starts region screenshot mode (CAP-006): opens a borderless fullscreen
-/// overlay on the monitor containing the cursor for region selection.
-/// ARC-001: window logic lives in platform::window_manager.
-#[tauri::command]
-pub async fn start_region_capture(app: tauri::AppHandle) -> Result<(), String> {
-    crate::platform::window_manager::start_region_overlay(&app)
 }
 
 /// Region capture context for coordinate conversion in the overlay frontend.
@@ -307,12 +137,12 @@ pub async fn capture_region_screenshot(
     // Let the compositor repaint without the overlay
     tokio::time::sleep(std::time::Duration::from_millis(80)).await;
 
-    let png_data = crate::platform::windows::screenshot::capture_region(
-        request.x,
-        request.y,
-        request.width,
-        request.height,
-    )?;
+    let region = (request.x, request.y, request.width, request.height);
+    let png_data = tokio::task::spawn_blocking(move || {
+        crate::platform::windows::screenshot::capture_region(region.0, region.1, region.2, region.3)
+    })
+    .await
+    .map_err(|e| e.to_string())??;
 
     // Close overlay after capture
     if let Some(window) =
@@ -324,7 +154,8 @@ pub async fn capture_region_screenshot(
     // Persist as screenshot item (same pipeline as full-screen capture)
     let asset_store = crate::infrastructure::asset_store::AssetStore::new(state.data_dir.clone());
     let staged = asset_store
-        .stage_bytes(&png_data, Some("region_screenshot.png"))
+        .stage_bytes_async(png_data, Some("region_screenshot.png".to_string()))
+        .await
         .map_err(|e| e.to_string())?;
 
     let now = UnixMs::now();
@@ -332,21 +163,21 @@ pub async fn capture_region_screenshot(
 
     state
         .db
-        .insert_captured_asset_item(
-            item_id.as_str(),
-            "screenshot",
-            "Region Screenshot",
-            "screenshot",
-            state.device_id.as_str(),
-            now.as_millis(),
-            &staged.sha256,
-            "image",
-            "image/png",
-            staged.byte_size as i64,
-            &staged.relative_path,
-            "",
-            "region_screenshot.png",
-        )
+        .insert_captured_asset_item(&CapturedAssetInsert {
+            item_id: item_id.as_str(),
+            item_type: "screenshot",
+            title: "Region Screenshot",
+            capture_method: "screenshot",
+            device_id: state.device_id.as_str(),
+            now_ms: now.as_millis(),
+            sha256: &staged.sha256,
+            media_kind: "image",
+            mime_type: "image/png",
+            byte_size: staged.byte_size as i64,
+            relative_path: &staged.relative_path,
+            source_app: "",
+            filename: "region_screenshot.png",
+        })
         .await
         .map_err(|e| e.to_string())?;
 

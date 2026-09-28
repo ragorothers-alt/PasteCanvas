@@ -100,6 +100,15 @@ pub struct BoardSnapshotDto {
     pub edges: Vec<BoardEdgeDto>,
 }
 
+/// Minimal listing row for trashed boards/folders (Trash restore section).
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TrashedEntryDto {
+    pub id: String,
+    pub name: String,
+    pub deleted_at: i64,
+}
+
 pub struct BoardService {
     db: AppDatabase,
     device_id: EntityId,
@@ -166,6 +175,43 @@ impl BoardService {
             .await
     }
 
+    /// Trashed boards (deleted_at set), most recently trashed first.
+    /// Lightweight listing for the Trash restore section.
+    pub async fn list_trashed_boards(&self) -> Result<Vec<TrashedEntryDto>, BoardServiceError> {
+        let rows: Vec<(String, String, i64)> = sqlx::query_as(
+            "SELECT id, name, deleted_at FROM boards
+             WHERE deleted_at IS NOT NULL ORDER BY deleted_at DESC",
+        )
+        .fetch_all(self.db.pool())
+        .await?;
+        Ok(rows
+            .into_iter()
+            .map(|(id, name, deleted_at)| TrashedEntryDto {
+                id,
+                name,
+                deleted_at,
+            })
+            .collect())
+    }
+
+    /// Trashed folders (deleted_at set), most recently trashed first.
+    pub async fn list_trashed_folders(&self) -> Result<Vec<TrashedEntryDto>, BoardServiceError> {
+        let rows: Vec<(String, String, i64)> = sqlx::query_as(
+            "SELECT id, name, deleted_at FROM folders
+             WHERE deleted_at IS NOT NULL ORDER BY deleted_at DESC",
+        )
+        .fetch_all(self.db.pool())
+        .await?;
+        Ok(rows
+            .into_iter()
+            .map(|(id, name, deleted_at)| TrashedEntryDto {
+                id,
+                name,
+                deleted_at,
+            })
+            .collect())
+    }
+
     /// BRD-007: most recently used boards (sidebar "Recent" section).
     /// Opening a board touches `updated_at` (see get_board_snapshot).
     pub async fn get_recent_boards(
@@ -177,7 +223,9 @@ impl BoardService {
             .await
     }
 
-    /// Shared board-summary query. `order_by` is always a compile-time constant.
+    /// Shared board-summary query. `order_by` is always a compile-time
+    /// constant. Node counts come from one aggregated LEFT JOIN — never a
+    /// per-board round trip.
     async fn query_board_summaries(
         &self,
         order_by: &str,
@@ -185,8 +233,14 @@ impl BoardService {
     ) -> Result<Vec<BoardSummaryDto>, BoardServiceError> {
         let sql = format!(
             "SELECT b.id, b.folder_id, b.name, b.description, b.is_favorite, b.sort_key,
-                    b.viewport_x, b.viewport_y, b.viewport_zoom, b.created_at, b.updated_at
+                    b.viewport_x, b.viewport_y, b.viewport_zoom, b.created_at, b.updated_at,
+                    COALESCE(c.node_count, 0)
              FROM boards b
+             LEFT JOIN (
+                 SELECT board_id, COUNT(*) AS node_count
+                 FROM board_nodes WHERE deleted_at IS NULL
+                 GROUP BY board_id
+             ) c ON c.board_id = b.id
              WHERE b.deleted_at IS NULL
              {order_by}{}",
             if limit.is_some() { " LIMIT ?" } else { "" }
@@ -205,6 +259,7 @@ impl BoardService {
                 f64,
                 i64,
                 i64,
+                i64,
             ),
         >(&sql);
         if let Some(l) = limit {
@@ -212,34 +267,40 @@ impl BoardService {
         }
         let rows = query.fetch_all(self.db.pool()).await?;
 
-        let mut boards = Vec::new();
-        for (id, folder_id, name, description, is_fav, sort_key, vx, vy, vz, created, updated) in
-            rows
-        {
-            let count: (i64,) = sqlx::query_as(
-                "SELECT COUNT(*) FROM board_nodes WHERE board_id = ? AND deleted_at IS NULL",
+        Ok(rows
+            .into_iter()
+            .map(
+                |(
+                    id,
+                    folder_id,
+                    name,
+                    description,
+                    is_fav,
+                    sort_key,
+                    vx,
+                    vy,
+                    vz,
+                    created,
+                    updated,
+                    node_count,
+                )| {
+                    BoardSummaryDto {
+                        id,
+                        folder_id,
+                        name,
+                        description,
+                        is_favorite: is_fav == 1,
+                        sort_key,
+                        node_count,
+                        viewport_x: vx,
+                        viewport_y: vy,
+                        viewport_zoom: vz,
+                        created_at: created,
+                        updated_at: updated,
+                    }
+                },
             )
-            .bind(&id)
-            .fetch_one(self.db.pool())
-            .await?;
-
-            boards.push(BoardSummaryDto {
-                id,
-                folder_id,
-                name,
-                description,
-                is_favorite: is_fav == 1,
-                sort_key,
-                node_count: count.0,
-                viewport_x: vx,
-                viewport_y: vy,
-                viewport_zoom: vz,
-                created_at: created,
-                updated_at: updated,
-            });
-        }
-
-        Ok(boards)
+            .collect())
     }
 
     /// Gets a full board snapshot (board + all nodes with item data).
@@ -1131,27 +1192,31 @@ impl BoardService {
         let now = UnixMs::now();
         let group_id = EntityId::new();
 
-        // Compute group bounds from selected nodes
+        // Compute group bounds from selected nodes (single IN query, no N+1)
         let mut min_x = f64::MAX;
         let mut min_y = f64::MAX;
         let mut max_x = f64::MIN;
         let mut max_y = f64::MIN;
 
+        let id_placeholders = vec!["?"; node_ids.len()].join(", ");
+        let bounds_sql = format!(
+            "SELECT x, y, width, height FROM board_nodes
+             WHERE id IN ({id_placeholders}) AND board_id = ? AND deleted_at IS NULL"
+        );
+        let mut bounds_query = sqlx::query_as::<_, (f64, f64, f64, f64)>(&bounds_sql);
         for nid in node_ids {
-            let row: Option<(f64, f64, f64, f64)> = sqlx::query_as(
-                "SELECT x, y, width, height FROM board_nodes WHERE id = ? AND board_id = ? AND deleted_at IS NULL",
-            )
-            .bind(nid)
+            bounds_query = bounds_query.bind(nid);
+        }
+        let rows: Vec<(f64, f64, f64, f64)> = bounds_query
             .bind(board_id)
-            .fetch_optional(self.db.pool())
+            .fetch_all(self.db.pool())
             .await?;
 
-            if let Some((x, y, w, h)) = row {
-                min_x = min_x.min(x);
-                min_y = min_y.min(y);
-                max_x = max_x.max(x + w);
-                max_y = max_y.max(y + h);
-            }
+        for (x, y, w, h) in rows {
+            min_x = min_x.min(x);
+            min_y = min_y.min(y);
+            max_x = max_x.max(x + w);
+            max_y = max_y.max(y + h);
         }
 
         if min_x == f64::MAX {
@@ -1190,21 +1255,20 @@ impl BoardService {
         .execute(&mut *tx)
         .await?;
 
-        // Convert children to relative coordinates
-        for nid in node_ids {
-            sqlx::query(
-                "UPDATE board_nodes SET x = x - ?, y = y - ?, parent_node_id = ?, updated_at = ?, revision = revision + 1
-                 WHERE id = ? AND board_id = ? AND deleted_at IS NULL",
-            )
+        // Convert children to relative coordinates (single IN update)
+        let reparent_sql = format!(
+            "UPDATE board_nodes SET x = x - ?, y = y - ?, parent_node_id = ?, updated_at = ?, revision = revision + 1
+             WHERE id IN ({id_placeholders}) AND board_id = ? AND deleted_at IS NULL"
+        );
+        let mut reparent_query = sqlx::query(&reparent_sql)
             .bind(min_x)
             .bind(min_y)
             .bind(group_id.as_str())
-            .bind(now.as_millis())
-            .bind(nid)
-            .bind(board_id)
-            .execute(&mut *tx)
-            .await?;
+            .bind(now.as_millis());
+        for nid in node_ids {
+            reparent_query = reparent_query.bind(nid);
         }
+        reparent_query.bind(board_id).execute(&mut *tx).await?;
 
         sqlx::query(
             "UPDATE boards SET board_revision = board_revision + 1, updated_at = ? WHERE id = ?",

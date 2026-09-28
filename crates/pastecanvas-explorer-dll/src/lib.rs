@@ -15,7 +15,7 @@ use std::ffi::c_void;
 use std::sync::atomic::{AtomicU32, Ordering};
 
 use windows::Win32::Foundation::{
-    CLASS_E_CLASSNOTAVAILABLE, E_FAIL, E_NOINTERFACE, E_OUTOFMEMORY, E_POINTER, S_FALSE, S_OK,
+    CLASS_E_CLASSNOTAVAILABLE, E_FAIL, E_OUTOFMEMORY, E_POINTER, S_FALSE, S_OK,
 };
 use windows::Win32::System::Com::{
     CoTaskMemAlloc, CoTaskMemFree, IClassFactory, IClassFactory_Impl,
@@ -42,6 +42,14 @@ static MODULE_REFCOUNT: AtomicU32 = AtomicU32::new(0);
 #[implement(IExplorerCommand)]
 struct PasteCanvasCommand {
     to_board: bool,
+}
+
+/// COM objects created by this module keep it loaded: DllCanUnloadNow must
+/// never report unloadable while the shell still holds an object pointer.
+impl Drop for PasteCanvasCommand {
+    fn drop(&mut self) {
+        MODULE_REFCOUNT.fetch_sub(1, Ordering::SeqCst);
+    }
 }
 
 /// Allocates a CoTaskMem-backed PWSTR copy of a Rust string (the shell frees it).
@@ -101,7 +109,9 @@ fn this_dll_dir() -> Option<std::path::PathBuf> {
             return None;
         }
         let dll_path = String::from_utf16_lossy(&buf[..len as usize]);
-        std::path::Path::new(&dll_path).parent().map(|p| p.to_path_buf())
+        std::path::Path::new(&dll_path)
+            .parent()
+            .map(|p| p.to_path_buf())
     }
 }
 
@@ -189,6 +199,12 @@ struct PasteCanvasFactory {
     to_board: bool,
 }
 
+impl Drop for PasteCanvasFactory {
+    fn drop(&mut self) {
+        MODULE_REFCOUNT.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
 impl IClassFactory_Impl for PasteCanvasFactory_Impl {
     fn CreateInstance(
         &self,
@@ -202,10 +218,13 @@ impl IClassFactory_Impl for PasteCanvasFactory_Impl {
         }
         unsafe { *ppvobject = std::ptr::null_mut() };
 
-        let cmd: IExplorerCommand = PasteCanvasCommand {
-            to_board: self.to_board,
-        }
-        .into();
+        let cmd: IExplorerCommand = {
+            MODULE_REFCOUNT.fetch_add(1, Ordering::SeqCst);
+            PasteCanvasCommand {
+                to_board: self.to_board,
+            }
+            .into()
+        };
         let unknown: IUnknown = cmd.cast()?;
         unsafe { unknown.query(riid, ppvobject).ok() }
     }
@@ -244,7 +263,10 @@ pub extern "system" fn DllGetClassObject(
             return CLASS_E_CLASSNOTAVAILABLE;
         };
 
-        let factory: IClassFactory = PasteCanvasFactory { to_board }.into();
+        let factory: IClassFactory = {
+            MODULE_REFCOUNT.fetch_add(1, Ordering::SeqCst);
+            PasteCanvasFactory { to_board }.into()
+        };
         let unknown: IUnknown = match factory.cast() {
             Ok(u) => u,
             Err(e) => return e.code(),
@@ -273,7 +295,3 @@ unsafe extern "system" {
     fn GetModuleFileNameW(hmodule: *mut c_void, filename: *mut u16, nsize: u32) -> u32;
     fn GetModuleHandleExW(flags: u32, name: *const u16, module: *mut *mut c_void) -> i32;
 }
-
-// Referenced to keep the unused-import lint quiet if a variant is not built.
-#[allow(dead_code)]
-const _E_NOINTERFACE_REF: HRESULT = E_NOINTERFACE;
