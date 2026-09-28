@@ -1495,6 +1495,28 @@ body {
 
 body { background: var(--color-bg); color: var(--color-text); }
 .app-root { background: var(--color-bg); }
+
+/* color-mix fallback: Tauri ships Chromium WebView2 (color-mix is safe),
+   but browser-preview WebKit variants may lack it — degrade to solid
+   token surfaces instead of transparent. */
+@supports not (background: color-mix(in srgb, red 50%, transparent)) {
+  .sidebar { box-shadow: none; }
+  .nav-item:hover, .nav-item.active,
+  .sidebar .nav-item.active,
+  .sidebar .btn-add-board:hover,
+  .sidebar .btn-board-fav:hover,
+  .sidebar .btn-folder-rename:hover,
+  .sidebar .btn-folder-trash:hover,
+  .settings-category:hover, .settings-category.active,
+  .search-container .filter-chip.active,
+  .group-mode-btn.active { background: var(--color-surface-raised); border-color: var(--color-border); }
+  .command-capture, .inbox-item:hover, .theme-option.active { box-shadow: none; }
+  .item-icon { background: var(--color-surface-raised); }
+  .inbox-empty { background: var(--color-surface); }
+  .settings-category.active small { color: var(--color-text-muted); }
+  .inbox-item.is-selected { box-shadow: none; }
+  .search-spinner { border-top-color: var(--color-text-muted); }
+}
 .sidebar { width: 240px; min-width: 240px; padding: 28px 16px 16px; background: var(--color-surface); border-right: 1px solid var(--color-border); box-shadow: 10px 0 30px color-mix(in srgb, var(--color-accent) 4%, transparent); }
 .sidebar-brand { padding: 0 12px 12px; }
 .sidebar-brand h1 { font-size: 1.2rem; letter-spacing: -.04em; }
