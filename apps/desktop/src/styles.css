@@ -1,18 +1,5 @@
-:root {
-  --color-bg: #0f0f0f;
-  --color-surface: #1a1a2e;
-  --color-surface-glass: rgba(255, 255, 255, 0.05);
-  --color-border: rgba(255, 255, 255, 0.08);
-  --color-text: #e8e8e8;
-  --color-text-muted: #a0a0a0;
-  --color-accent: #6c9fff;
-  --color-success: #4caf50;
-  --color-error: #ef5350;
-  --radius-md: 8px;
-  --radius-lg: 12px;
-  --font-sans: "Segoe UI", system-ui, -apple-system, sans-serif;
-}
-
+/* Base reset + root layout. Theme tokens live in the single :root block
+   below (light default, [data-theme="dark"] + system overrides). */
 * { margin: 0; padding: 0; box-sizing: border-box; }
 
 html, body, #root { height: 100%; overflow: hidden; }
@@ -1462,6 +1449,7 @@ body {
   --radius-md: 10px;
   --radius-lg: 15px;
   --font-display: "Segoe UI Variable Display", "Segoe UI", system-ui, sans-serif;
+  --font-sans: "Segoe UI", system-ui, -apple-system, sans-serif;
   --font-mono: "Cascadia Code", "Cascadia Mono", monospace;
   --shadow-soft: 0 10px 26px rgba(43, 58, 96, .08);
   --shadow-panel: 0 20px 60px rgba(43, 58, 96, .15);
@@ -1625,7 +1613,9 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 @media (max-width: 980px) {
   .command-context { min-width: 112px; }
   .command-status { display: none; }
-  .item-detail { top: 56px; left: 0; width: 100%; max-width: none; }
+  /* Full-sheet inspector on tablet and below — single monotonic rule;
+     narrower breakpoints only adjust inner padding, not geometry. */
+  .item-detail { top: 56px; left: 0; right: 0; width: auto; max-width: none; }
 }
 
 @media (max-width: 760px) {
@@ -1637,7 +1627,6 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   .inbox-view { padding: 18px; }
   .group-mode-selector { width: 100%; margin-left: 0; overflow-x: auto; }
   .group-mode-btn { flex: 1; white-space: nowrap; }
-  .item-detail { top: 66px; width: min(320px, 88vw); max-width: none; }
 }
 
 @media (max-width: 640px) {
@@ -1663,7 +1652,9 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   .inbox-view { padding: 12px; }
   .inbox-header h2 { font-size: 1.1rem; }
   .inbox-count { margin-left: 0; }
-  .item-detail { top: 58px; left: 0; width: 100%; max-width: none; }
+  /* Inherits the 980px full-sheet rule (top:56); only the offset tracks
+     the shorter 58px command bar here. */
+  .item-detail { top: 58px; }
 }
 
 /* Final shell geometry. Keep the command bar and navigation rows as a
