@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { useUndoStore, createMoveCommand, createResizeCommand } from "../stores/undoStore";
+import { useUndoStore, createMoveCommand, createResizeCommand, createRemoveNodesCommand } from "../stores/undoStore";
 
 // Mock the boards API
 vi.mock("../features/boards/api", () => ({
@@ -136,6 +136,35 @@ describe("createMoveCommand", () => {
       [{ nodeId: "n1", x: 0, y: 0 }, { nodeId: "n2", x: 0, y: 0 }],
     );
     expect(cmd.description).toBe("Move 2 node(s)");
+  });
+});
+
+describe("createRemoveNodesCommand (batch remove)", () => {
+  it("undo re-places item nodes and redo removes the live ids", async () => {
+    const { placeItemOnBoard, removeNode } = await import("../features/boards/api");
+    vi.mocked(placeItemOnBoard)
+      .mockResolvedValueOnce("new-n1")
+      .mockResolvedValueOnce("new-n2");
+    vi.mocked(removeNode).mockClear();
+
+    const cmd = createRemoveNodesCommand("board-1", [
+      { nodeId: "n1", itemId: "item-1", x: 10, y: 20 },
+      { nodeId: "n2", itemId: "item-2", x: 30, y: 40 },
+      { nodeId: "g1", itemId: null, x: 0, y: 0 },
+    ]);
+    expect(cmd.description).toBe("Remove 3 node(s)");
+
+    await cmd.undo();
+    expect(placeItemOnBoard).toHaveBeenCalledWith("board-1", "item-1", 10, 20);
+    expect(placeItemOnBoard).toHaveBeenCalledWith("board-1", "item-2", 30, 40);
+    // Group node (no item) is not re-placed via API
+    expect(vi.mocked(placeItemOnBoard)).toHaveBeenCalledTimes(2);
+
+    // Redo removes the NEW ids from undo, not the stale pre-undo ids
+    await cmd.redo();
+    expect(removeNode).toHaveBeenCalledWith("board-1", "new-n1");
+    expect(removeNode).toHaveBeenCalledWith("board-1", "new-n2");
+    expect(removeNode).toHaveBeenCalledWith("board-1", "g1");
   });
 });
 

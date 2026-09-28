@@ -47,7 +47,7 @@ import { computeKeyboardMoves } from "../../adapters/canvas/canvasKeyboard";
 import { ItemCardNode } from "./ItemCardNode";
 import { BoardLinkNode } from "./BoardLinkNode";
 import { GroupNode } from "./GroupNode";
-import { useUndoStore, createMoveCommand, createRemoveNodeCommand, createGroupCommand } from "../../stores/undoStore";
+import { useUndoStore, createMoveCommand, createRemoveNodesCommand, createGroupCommand } from "../../stores/undoStore";
 
 const nodeTypes = {
   itemCard: ItemCardNode,
@@ -363,17 +363,23 @@ export function BoardView({ board, onEnterBoard }: BoardViewProps) {
     refreshCanvas();
   }, [redo, refreshCanvas]);
 
+  // One history entry per remove gesture: all selected nodes are removed
+  // together and a single Ctrl+Z restores them (batch undo). Item-backed
+  // nodes re-place on undo; group/boardLink nodes restore via refresh.
   const handleRemoveSelected = useCallback(() => {
     const selected = nodesRef.current.filter((n) => n.selected);
     if (selected.length === 0) return;
     const ids = new Set(selected.map((n) => n.id));
+    const snapshot = selected.map((n) => ({
+      nodeId: n.id,
+      itemId: (n.data.itemId as string | null) ?? null,
+      x: n.position.x,
+      y: n.position.y,
+    }));
     for (const n of selected) {
       void removeNode(board.id, n.id);
-      const itemId = n.data.itemId;
-      if (itemId) {
-        push(createRemoveNodeCommand(board.id, n.id, itemId, n.position.x, n.position.y));
-      }
     }
+    push(createRemoveNodesCommand(board.id, snapshot));
     setNodes((ns) => ns.filter((n) => !ids.has(n.id)));
     setEdges((es) => es.filter((edge) => !ids.has(edge.source) && !ids.has(edge.target)));
   }, [board.id, push, setNodes, setEdges]);
@@ -561,15 +567,25 @@ export function BoardView({ board, onEnterBoard }: BoardViewProps) {
     [board.id],
   );
 
+  // Multi-select drag moves every selected node locally — persist the whole
+  // batch (XYFlow passes all dragged nodes as the 3rd arg), not just the
+  // drag subject, or the DB + undo drift out of sync.
   const handleNodeDragStop = useCallback(
-    (_event: unknown, node: CanvasNode) => {
-      const orig = originalPositions.current.get(node.id);
-      if (orig && (orig.x !== node.position.x || orig.y !== node.position.y)) {
-        const moves = [{ nodeId: node.id, x: node.position.x, y: node.position.y }];
-        const prevPositions = [{ nodeId: node.id, x: orig.x, y: orig.y }];
+    (_event: unknown, _node: CanvasNode, dragged: CanvasNode[] = []) => {
+      const targets = dragged.length > 0 ? dragged : [_node];
+      const moves: Array<{ nodeId: string; x: number; y: number }> = [];
+      const prevPositions: Array<{ nodeId: string; x: number; y: number }> = [];
+      for (const n of targets) {
+        const orig = originalPositions.current.get(n.id);
+        if (orig && (orig.x !== n.position.x || orig.y !== n.position.y)) {
+          moves.push({ nodeId: n.id, x: n.position.x, y: n.position.y });
+          prevPositions.push({ nodeId: n.id, x: orig.x, y: orig.y });
+          originalPositions.current.set(n.id, { ...n.position });
+        }
+      }
+      if (moves.length > 0) {
         void moveNodes(board.id, moves);
         push(createMoveCommand(board.id, moves, prevPositions));
-        originalPositions.current.set(node.id, { ...node.position });
       }
     },
     [board.id, push],

@@ -115,14 +115,49 @@ export function createRemoveNodeCommand(
   x: number,
   y: number,
 ): UndoCommand {
+  return createRemoveNodesCommand(boardId, [{ nodeId, itemId, x, y }]);
+}
+
+export interface RemovedNodeSnapshot {
+  nodeId: string;
+  /** Null for group / boardLink nodes — re-created via snapshot reload. */
+  itemId: string | null;
+  x: number;
+  y: number;
+}
+
+/**
+ * Batch remove: one history entry per gesture. Undo re-places every
+ * item-backed node and tracks the NEW ids it comes back with, so redo
+ * removes the live nodes instead of the stale pre-undo ids. Nodes without
+ * an item backing (groups, board links) are restored by the caller's
+ * snapshot refresh — they are still removed atomically with the batch.
+ */
+export function createRemoveNodesCommand(
+  boardId: string,
+  removed: RemovedNodeSnapshot[],
+): UndoCommand {
+  let liveIds = removed.map((r) => r.nodeId);
   return {
-    description: "Remove node",
+    description: `Remove ${removed.length} node(s)`,
     undo: async () => {
-      // Re-place the item at its previous position
-      await placeItemOnBoard(boardId, itemId, x, y);
+      const restored: string[] = [];
+      for (const r of removed) {
+        if (r.itemId) {
+          // Re-place the item at its previous position; track the new id.
+          const newId = await placeItemOnBoard(boardId, r.itemId, r.x, r.y);
+          restored.push(typeof newId === "string" ? newId : r.nodeId);
+        } else {
+          restored.push(r.nodeId);
+        }
+      }
+      liveIds = restored;
     },
     redo: async () => {
-      await removeNode(boardId, nodeId);
+      for (const id of liveIds) {
+        await removeNode(boardId, id);
+      }
+      liveIds = removed.map((r) => r.nodeId);
     },
   };
 }
